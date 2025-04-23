@@ -77,5 +77,4 @@ def detect_outliers_ui(df):
         file_name="MMM_Outliers_Treated.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
     return treated_df
