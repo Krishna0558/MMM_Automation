@@ -23,7 +23,7 @@ def show_visualizations(df, target_var=None):
                 sns.lineplot(data=df, x=date_col, y=target_var)
                 plt.title(f'{target_var} Trend Over Time')
                 plt.xticks(rotation=45)
-                st.pyplot(fig)
+                st.pyplot(fig)#87654345678764
             else:
                 st.warning("Could not find target variable for trend analysis")
         else:
