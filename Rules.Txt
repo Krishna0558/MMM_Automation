@@ -1,0 +1,30 @@
+It should be in CSV or Excel format
+the conversions are not getting clubed due to - and it is not getting sum
+
+date column error (check datatype of it)--> raise error || Done
+remove select || Done
+put radio || We have to work on this later
+insufficient data 2 options select data again and continue with it || Done
+** Headings ** || At last
+
+
+Today Feedback:(4/21/2025)
+
+Missing values Percentage pettali(2nd column) - Missing percentage || Done
+Radio buttons
+Enhance - NONE anedhi ela telusthadhi
+Only target ki chalu outlieres || Done
+Graphs cheydam -
+
+
+
+We have already replaced NAN with zeros
+
+
+Todays(4/22/2025)
+Removed all the unneccesary columns and added new input variable for the control variables
+Done the Visualization
+Done the R script code
+Resolved some issues in the code when it was not capturing the imputation data
+Found a error where session time
+Some work on the Rajat task
