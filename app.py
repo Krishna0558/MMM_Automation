@@ -5,6 +5,7 @@ import io
 import numpy as np
 import plotly.express as px
 from robyn import Robyn
+from datetime import datetime
 import subprocess
 import tempfile
 import os
@@ -62,6 +63,7 @@ def clean_column_names(df):
         name = str(name).strip()
         name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
         name = re.sub(r'_+', '_', name)
+        # name = re.sub(r'_+', '_', name)
         if name and name[0].isdigit():
             name = f"var_{name}"
         return name
@@ -74,6 +76,7 @@ st.header("Step 1: Upload and Transform Your Data")
 
 uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=['csv', 'xlsx'])
 
+
 if st.session_state.current_step == 1 and uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
@@ -81,6 +84,24 @@ if st.session_state.current_step == 1 and uploaded_file is not None:
         st.success("✅ File uploaded successfully!")
         st.subheader("Preview of Uploaded Data")
         st.dataframe(df.head())
+        st.subheader("Enter Project Details")
+
+        # 1️⃣ Input for Username
+        username = st.text_input("Enter your name")
+
+        # 2️⃣ Auto-filled Project Name (from file name)
+        project_name = uploaded_file.name
+
+        # 3️⃣ Create a DataFrame with these two columns
+        if username:
+            preview_df = pd.DataFrame({
+                "User Name": [username],
+                "Project Name": [project_name]
+            })
+            st.subheader("Project Details Preview")
+            st.dataframe(preview_df)
+        else:
+            st.info("Please enter your name to see the project details preview.")
 
         st.subheader("Step 2: Select Variables")
 
@@ -111,7 +132,7 @@ if st.session_state.current_step == 1 and uploaded_file is not None:
                 st.error("❌ Target must be numeric")
 
         with col3:
-            pivot_var = st.selectbox("Pivot Variable (e.g., Ad Format or Media Channel)", df.columns)
+            pivot_var = st.selectbox("Pivot Variable", df.columns)
             valid_pivot = df[pivot_var].dtype in ['object', 'category']
             if not valid_pivot:
                 st.error("❌ Pivot variable must be categorical")
@@ -339,6 +360,12 @@ elif st.session_state.current_step == 6:
                     # Create output directory and save JSON
                     output_dir = "robyn_output"
                     os.makedirs(output_dir, exist_ok=True)
+                    cleaned_df = clean_column_names(st.session_state.insights_df.copy())
+                    old_to_new_names = dict(zip(st.session_state.insights_df.columns, cleaned_df.columns))
+                    target_var = old_to_new_names.get(target_var, target_var)
+                    media_vars = [old_to_new_names.get(var, var) for var in media_vars]
+                    control_vars = [old_to_new_names.get(var, var) for var in control_vars]
+                    date_var = old_to_new_names.get(date_var, date_var) if date_var else None
                     config = {
                         "data_path": "",  # Will be updated after tempfile creation
                         "dep_var": target_var,
@@ -351,12 +378,6 @@ elif st.session_state.current_step == 6:
                     }
 
                     # Clean column names and save temporary CSV
-                    cleaned_df = clean_column_names(st.session_state.insights_df.copy())
-                    old_to_new_names = dict(zip(st.session_state.insights_df.columns, cleaned_df.columns))
-                    target_var = old_to_new_names.get(target_var, target_var)
-                    media_vars = [old_to_new_names.get(var, var) for var in media_vars]
-                    control_vars = [old_to_new_names.get(var, var) for var in control_vars]
-                    date_var = old_to_new_names.get(date_var, date_var) if date_var else None
 
                     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_file:
                         cleaned_df.to_csv(tmp_file.name, index=False)
@@ -367,7 +388,36 @@ elif st.session_state.current_step == 6:
                     config_path = os.path.join(output_dir, "config.json")
                     with open(config_path, "w") as f:
                         json.dump(config, f)
-                    st.write(f"Saved configuration to {config_path}")
+                    # st.write(f"Saved configuration to {config_path}")
+
+                    all_experiments_path = os.path.join(output_dir, "all_experiments.json")
+
+                    # Check if file exists → load existing data, else create new dict
+                    if os.path.exists(all_experiments_path):
+                        with open(all_experiments_path, "r") as f:
+                            experiments = json.load(f)
+                    else:
+                        experiments = {}
+
+                    exp_numbers = [int(k.split("_")[1]) for k in experiments.keys() if k.startswith("experiment_")]
+                    next_exp_num = max(exp_numbers) + 1 if exp_numbers else 1
+                    exp_key = f"experiment_{next_exp_num}"
+
+                    exp = {
+                        "Spend_variables": ",".join(media_vars),
+                        "Control_variables": ",".join(control_vars) if control_vars else "none",
+                        "Adstock": adstock,
+                        "Iterations": str(int(iterations)),
+                        "Trials": str(int(trials)),
+                        "Timestamp": datetime.now().isoformat()
+                    }
+
+
+                    experiments[exp_key] = exp
+
+                    # Save back to JSON
+                    with open(all_experiments_path, "w") as f:
+                        json.dump(experiments, f, indent=4)
 
                     # Construct and run command
                     cmd = [
@@ -382,9 +432,10 @@ elif st.session_state.current_step == 6:
                         str(int(iterations)),
                         str(int(trials))
                     ]
-                    st.write("Running command:", " ".join(cmd))
 
-                    timeout_minutes = 15
+                    # st.write("Running command:", " ".join(cmd))
+
+                    timeout_minutes = 20
                     start_time = time.time()
                     process = subprocess.Popen(
                         cmd,
@@ -400,6 +451,7 @@ elif st.session_state.current_step == 6:
                         full_output = ""
                         stages = ["Starting", "Installing packages", "Running model", "Generating outputs"]
                         stage_progress = 0
+                        # st.write("first")
 
                         while True:
                             elapsed_time = (time.time() - start_time) / 60
@@ -429,6 +481,13 @@ elif st.session_state.current_step == 6:
                     with open("robyn_log.txt", "w", encoding='utf-8') as f:
                         f.write(full_output)
                     st.write("Debug log saved to robyn_log.txt")
+                    st.subheader("Data Preview and Correlations")
+                    st.write("Summary Statistics:", cleaned_df[media_vars + [target_var]].describe())
+                    st.write("Correlations with Target:",
+                             cleaned_df[media_vars + [target_var]].corr()[target_var])
+                    with open("robyn_log.txt", "w", encoding='utf-8') as f:
+                        f.write(full_output)
+                    st.write(process.returncode)
 
                     if process.returncode == 0:
                         st.success("🎉 Modeling completed successfully!")
@@ -436,6 +495,8 @@ elif st.session_state.current_step == 6:
 
                         output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
                         plot_path = os.path.join(output_dir, "plots")
+                        model_metrics_path = os.path.join(output_dir, "model_metrics.json")
+                        best_model_metrics_path = os.path.join(output_dir, "Best_Models")
 
                         if os.path.exists(plot_path):
                             st.subheader("Model Visualizations")
@@ -463,6 +524,7 @@ elif st.session_state.current_step == 6:
                             with open(hyper_path, "r", encoding='utf-8') as f:
                                 st.write("Hyperparameters used:", f.read().splitlines())
                     else:
+
                         error_msg = process.stderr.read()
                         st.error(f"Modeling failed: {error_msg}")
                         if "not converged" in error_msg.lower():
@@ -475,11 +537,11 @@ elif st.session_state.current_step == 6:
                             st.warning(
                                 "Generic error, likely due to plotting or empty results. Check robyn_log.txt for details.")
                         st.info("""
-                        **Troubleshooting Tips:**
-                        1. Use R 4.4.2 (confirmed working locally).
-                        2. Run in R:
-                           ```R
-                           install.packages(c('Robyn', 'dplyr', 'jsonlite', 'ggplot2', 'doSNOW'), dependencies=TRUE)""")
+                                            **Troubleshooting Tips:**
+                                            1. Use R 4.4.2 (confirmed working locally).
+                                            2. Run in R:
+                                               ```R
+                                               install.packages(c('Robyn', 'dplyr', 'jsonlite', 'ggplot2', 'doSNOW'), dependencies=TRUE)""")
 
                 except Exception as e:
                     st.error(f"Unexpected error: {str(e)}")
@@ -487,22 +549,55 @@ elif st.session_state.current_step == 6:
                     if os.path.exists(data_path):
                         os.unlink(data_path)
 
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("⬅️ Back to Data Insights"):
+                st.session_state.current_step -= 1
+                st.rerun()
+        with col2:
+            if st.button("🔄 Restart Modeling"):
+                st.session_state.current_step = 6
+                st.rerun()
+        with col3:
+            if st.button("🔄 History"):
+                st.session_state.current_step = 7
+                st.rerun()
+
+elif st.session_state.current_step == 7:
+    st.header("📜 Modeling History")
+
+    output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+    history_path = os.path.join(output_dir, "all_experiments.json")
+
+    if os.path.exists(history_path):
+        with open(history_path, "r", encoding="utf-8") as f:
+            experiments = json.load(f)
+
+        if experiments:
+            df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
+            df_history.rename(columns={"index": "Experiment"}, inplace=True)
+            st.dataframe(df_history)
+        else:
+            st.info("No experiments found in history.")
+    else:
+        st.warning("History file (all_experiments.json) not found.")
+
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("⬅️ Back to Data Insights"):
-            st.session_state.current_step -= 1
-            st.rerun()
-    with col2:
-        if st.button("🔄 Restart Modeling"):
+        if st.button("⬅️ Back to Modeling"):
             st.session_state.current_step = 6
             st.rerun()
+    with col2:
+        if st.button("🏠 Back to Home"):
+            st.session_state.current_step = 1
+            st.rerun()
 
-# Always show available PNG outputs (even if modeling failed)
-output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
-plot_path = os.path.join(output_dir, "plots")
-
-if os.path.exists(plot_path):
-    st.subheader("🖼️ Available Robyn Output Images")
-    plot_files = sorted([f for f in os.listdir(plot_path) if f.endswith(".png")])
-    for plot_file in plot_files:
-        st.image(os.path.join(plot_path, plot_file), caption=plot_file, use_column_width=True)
+            # Always show available PNG outputs (even if modeling failed)
+            # output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+            # plot_path = os.path.join(output_dir, "plots")
+            #
+            # if os.path.exists(plot_path):
+            #     st.subheader("🖼️ Available Robyn Output Images")
+            #     plot_files = sorted([f for f in os.listdir(plot_path) if f.endswith(".png")])
+            #     for plot_file in plot_files:
+            #         st.image(os.path.join(plot_path, plot_file), caption=plot_file, use_column_width=True)

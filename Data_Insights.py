@@ -235,6 +235,10 @@ def time_lag_analysis(df, target_var, reach_var, time_base):
     with st.expander("📈 Sequential Peak Lag Analysis", expanded=True):
         # Sort data and reset index
         df = df.sort_values('Date').reset_index(drop=True).copy()
+        if not reach_var or reach_var not in df.columns:
+            st.warning("Reach variable missing")
+            return
+
 
         # Find peaks using 7-day rolling window
         df['reach_peak'] = df[reach_var].rolling(7, center=True).max() == df[reach_var]
@@ -587,6 +591,9 @@ def frequency_capping_impact(df, reach_var, frequency_var, target_var):
         # Ensure Date is datetime
         df['Date'] = pd.to_datetime(df['Date'])
         df = df.sort_values('Date').reset_index(drop=True)
+        if not reach_var or reach_var not in df.columns:
+            st.warning("Reach variable missing")
+            return
 
         # Determine high reach threshold (80th percentile)
         reach_threshold = df[reach_var].quantile(0.8)
