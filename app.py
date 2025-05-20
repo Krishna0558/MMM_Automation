@@ -579,7 +579,7 @@ elif st.session_state.current_step == 6:
                                 st.error(f"❌ Required files not found in latest folder: `{folder_name}`")
                         # Locate latest updated folder in plot_path
                         # if os.path.exists(plot_path):
-                        #     subdirs = [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
+                        #     subdirs == [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
                         #                os.path.isdir(os.path.join(plot_path, d))]
                         #     if subdirs:
                         #         latest_plot_folder = max(subdirs, key=os.path.getmtime)
