@@ -72,7 +72,8 @@ def show_visualizations(df, target_var=None):
                 .reset_index()
                 .rename(columns={0: 'Correlation', 'level_0': 'Feature 1', 'level_1': 'Feature 2'})
             )
-            corr_pairs['Abs Correlation'] = corr_pairs['Correlation']
+            corr_pairs['Abs Correlation'] = corr_pairs['Correlation'].abs()
+            # corr_pair['Abs Correlation'] = corr_pairs['Correlation'].abs()
 
             # Get top 3 most and least correlated pairs
             most_corr = corr_pairs.sort_values(by='Abs Correlation', ascending=False).head(3)

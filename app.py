@@ -1,3 +1,4 @@
+import glob
 import re
 import streamlit as st
 import pandas as pd
@@ -6,9 +7,14 @@ import numpy as np
 import plotly.express as px
 from robyn import Robyn
 from datetime import datetime
+import pickle
 import subprocess
 import tempfile
 import os
+import shutil
+from io import BytesIO
+import zipfile
+import streamlit.components.v1 as components
 import time
 import json
 from Missing_Imputation import handle_missing_values_ui
@@ -70,14 +76,31 @@ def clean_column_names(df):
     df.columns = [make_valid_name(col) for col in df.columns]
     return df
 
-# Main App
-st.title("📊 MMM Automation UI")
-st.header("Step 1: Upload and Transform Your Data")
 
+@st.cache_data(show_spinner=False)
+
+def create_zip_buffer(folder_path):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, start=folder_path)
+                zipf.write(file_path, arcname)
+    buffer.seek(0)
+    return buffer
+
+# Main App
+st.markdown("<h1 style='text-align: center;'>📊 MMM Automation Interface</h1>", unsafe_allow_html=True)
+# st.header("Step 1: Upload and Transform Your Data")
+#
 uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=['csv', 'xlsx'])
 
 
 if st.session_state.current_step == 1 and uploaded_file is not None:
+    st.header("Step 1: Upload and Transform Your Data")
+
+    # uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=['csv', 'xlsx'])
     try:
         df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
 
@@ -90,7 +113,8 @@ if st.session_state.current_step == 1 and uploaded_file is not None:
         username = st.text_input("Enter your name")
 
         # 2️⃣ Auto-filled Project Name (from file name)
-        project_name = uploaded_file.name
+        default_project_name = os.path.splitext(uploaded_file.name)[0]
+        project_name = st.text_input("Edit project name if needed", value=default_project_name)
 
         # 3️⃣ Create a DataFrame with these two columns
         if username:
@@ -98,6 +122,8 @@ if st.session_state.current_step == 1 and uploaded_file is not None:
                 "User Name": [username],
                 "Project Name": [project_name]
             })
+            st.session_state["username"] = username
+            st.session_state["project_name"] = project_name
             st.subheader("Project Details Preview")
             st.dataframe(preview_df)
         else:
@@ -323,8 +349,11 @@ elif st.session_state.current_step == 6:
         n_rows = len(st.session_state.insights_df)
         n_ind_vars = len(media_vars) + len(control_vars)
         recommended_rows = n_ind_vars * 10
+
         st.write(
-            f"Dataset: {n_rows} rows, {n_ind_vars} independent variables (Media: {len(media_vars)}, Control: {len(control_vars)})")
+            f"Dataset: {n_rows} rows, {n_ind_vars} independent variables (Media: {len(media_vars)}, Control: {len(control_vars)})"
+        )
+
         if n_ind_vars > 0 and n_rows < recommended_rows:
             st.error(
                 f"❌ Insufficient data: {n_rows} rows with {n_ind_vars} independent variables. "
@@ -347,17 +376,13 @@ elif st.session_state.current_step == 6:
                 st.button("📂 Re-upload Data", on_click=lambda: st.session_state.update(current_step=1))
                 st.stop()
 
-        st.markdown("""
-        **System Requirements:**
-        - Expected runtime: 5–15 minutes
-        """)
+        st.markdown("**System Requirements:**\n- Expected runtime: 5–15 minutes")
 
         if not media_vars:
             st.warning("Please select at least one media variable.")
         elif st.button("🚀 Run Robyn Model"):
             with st.spinner("Running MMM modeling (may take 5–15 minutes)..."):
                 try:
-                    # Create output directory and save JSON
                     output_dir = "robyn_output"
                     os.makedirs(output_dir, exist_ok=True)
                     cleaned_df = clean_column_names(st.session_state.insights_df.copy())
@@ -366,188 +391,369 @@ elif st.session_state.current_step == 6:
                     media_vars = [old_to_new_names.get(var, var) for var in media_vars]
                     control_vars = [old_to_new_names.get(var, var) for var in control_vars]
                     date_var = old_to_new_names.get(date_var, date_var) if date_var else None
+
                     config = {
-                        "data_path": "",  # Will be updated after tempfile creation
+                        "data_path": "",
                         "dep_var": target_var,
                         "media_vars": ",".join(media_vars),
                         "control_vars": ",".join(control_vars) if control_vars else "none",
                         "date_var": date_var if date_var else "none",
                         "adstock_type": adstock,
                         "iterations": str(int(iterations)),
-                        "trials": str(int(trials))
+                        "trials": str(int(trials)),
+                        "User": st.session_state.get("username", "Unknown"),
+                        "Project_Name": st.session_state.get("project_name", "Unknown")
                     }
-
-                    # Clean column names and save temporary CSV
 
                     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_file:
                         cleaned_df.to_csv(tmp_file.name, index=False)
                         data_path = tmp_file.name
-                        config["data_path"] = data_path  # Update config with data_path
+                        config["data_path"] = data_path
 
-                    # Save JSON
-                    config_path = os.path.join(output_dir, "config.json")
-                    with open(config_path, "w") as f:
-                        json.dump(config, f)
-                    # st.write(f"Saved configuration to {config_path}")
+                    # # Save JSON
+                    # config_path = os.path.join(output_dir, "config.json")
+                    # with open(config_path, "w") as f:
+                    #     json.dump(config, f)
 
                     all_experiments_path = os.path.join(output_dir, "all_experiments.json")
-
-                    # Check if file exists → load existing data, else create new dict
                     if os.path.exists(all_experiments_path):
                         with open(all_experiments_path, "r") as f:
                             experiments = json.load(f)
                     else:
                         experiments = {}
 
-                    exp_numbers = [int(k.split("_")[1]) for k in experiments.keys() if k.startswith("experiment_")]
+                    # exp_numbers = [int(k.split("_")[1]) for k in experiments.keys() if k.startswith("experiment_")]
+                    # next_exp_num = max(exp_numbers) + 1 if exp_numbers else 1
+                    # exp_key = f"{next_exp_num}"
+                    # # exp_k = f"{next_exp_num}"
+                    # config["ID"] = exp_key
+                    exp_numbers = [int(k) for k in experiments.keys() if k.isdigit()]
                     next_exp_num = max(exp_numbers) + 1 if exp_numbers else 1
-                    exp_key = f"experiment_{next_exp_num}"
+                    exp_key = str(next_exp_num)
+                    config["ID"] = exp_key
 
                     exp = {
+                        "User": st.session_state.get("username", "Unknown"),
+                        "Project_Name": st.session_state.get("project_name", "Unknown"),
+                        "Timestamp": datetime.now().isoformat(),
                         "Spend_variables": ",".join(media_vars),
                         "Control_variables": ",".join(control_vars) if control_vars else "none",
                         "Adstock": adstock,
                         "Iterations": str(int(iterations)),
-                        "Trials": str(int(trials)),
-                        "Timestamp": datetime.now().isoformat()
+                        "Trials": str(int(trials))
+
                     }
 
-
                     experiments[exp_key] = exp
-
-                    # Save back to JSON
                     with open(all_experiments_path, "w") as f:
                         json.dump(experiments, f, indent=4)
+                    # experiments[exp_key] = config
+                    # with open(config_path, "w") as f:
+                    #     json.dump(experiments, f, indent=4)
+                    config_path = os.path.join(output_dir, "config.json")
+                    with open(config_path, "w") as f:
+                        json.dump(config, f)
 
-                    # Construct and run command
-                    cmd = [
-                        st.session_state.rscript_path,
-                        st.session_state.robyn_script_path,
-                        data_path,
-                        target_var,
-                        ",".join(media_vars),
-                        ",".join(control_vars) if control_vars else "none",
-                        date_var if date_var else "none",
-                        adstock,
-                        str(int(iterations)),
-                        str(int(trials))
-                    ]
 
-                    # st.write("Running command:", " ".join(cmd))
-
-                    timeout_minutes = 20
-                    start_time = time.time()
-                    process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        encoding='utf-8'
+                    result = subprocess.run(
+                        ["Rscript", st.session_state.robyn_script_path],
+                        capture_output=True, text=True
                     )
 
-                    with st.expander("Show modeling progress", expanded=True):
-                        progress_bar = st.progress(0)
-                        output_container = st.empty()
-                        full_output = ""
-                        stages = ["Starting", "Installing packages", "Running model", "Generating outputs"]
-                        stage_progress = 0
-                        # st.write("first")
+                    # st.subheader("Data Preview and Correlations")
+                    # st.write("Summary Statistics:", cleaned_df[media_vars + [target_var]].describe())
+                    # st.write("Correlations with Target:", cleaned_df[media_vars + [target_var]].corr()[target_var])
 
-                        while True:
-                            elapsed_time = (time.time() - start_time) / 60
-                            if elapsed_time > timeout_minutes:
-                                process.terminate()
-                                raise TimeoutError(
-                                    f"Modeling timed out after {timeout_minutes} minutes. Try reducing media variables or iterations.")
+                    plot_path = os.path.join(output_dir, "plots")
 
-                            try:
-                                output = process.stdout.readline()
-                                if output == '' and process.poll() is not None:
-                                    break
-                                if output:
-                                    full_output += output
-                                    output_container.code(full_output[-2000:])
+                    best_model_path = os.path.join(output_dir, "Best_Models")
 
-                                    if "installing" in output.lower():
-                                        stage_progress = max(stage_progress, 1)
-                                    elif "robyn_run started" in output.lower():
-                                        stage_progress = max(stage_progress, 2)
-                                    elif "robyn_outputs" in output.lower():
-                                        stage_progress = max(stage_progress, 3)
-                                    progress_bar.progress((stage_progress + 1) / len(stages))
-                            except UnicodeDecodeError:
-                                continue
-
-                    with open("robyn_log.txt", "w", encoding='utf-8') as f:
-                        f.write(full_output)
-                    st.write("Debug log saved to robyn_log.txt")
-                    st.subheader("Data Preview and Correlations")
-                    st.write("Summary Statistics:", cleaned_df[media_vars + [target_var]].describe())
-                    st.write("Correlations with Target:",
-                             cleaned_df[media_vars + [target_var]].corr()[target_var])
-                    with open("robyn_log.txt", "w", encoding='utf-8') as f:
-                        f.write(full_output)
-                    st.write(process.returncode)
-
-                    if process.returncode == 0:
+                    if result.returncode == 0:
                         st.success("🎉 Modeling completed successfully!")
-                        progress_bar.progress(1.0)
+                        st.session_state.modeling_done = True  # ✅ Set this flag
+
+                        # Continue with your logic: load metrics, show plots etc.
+                            # worked code for pickel
+                        # metrics_path = os.path.join(output_dir, "model_metrics.json")
+                        # model_info_path = os.path.join(output_dir, "RobynModel-models.json")
+                        # pickle_path = os.path.join(output_dir, "best_model_enhanced.pkl")
+                        #
+                        # # Load JSON files
+                        # with open(metrics_path, "r") as f:
+                        #     metrics = json.load(f)
+                        #
+                        # with open(model_info_path, "r") as f:
+                        #     full_model = json.load(f)
+                        #
+                        # # Extract enriched details
+                        # input_collect = full_model.get("InputCollect", {})
+                        # model_collect = full_model.get("ModelsCollect", {})
+                        #
+                        # enhanced_model_info = {
+                        #     "Model_ID": metrics.get("Model_ID"),
+                        #     "NRMSE": metrics.get("NRMSE"),
+                        #     "Adjusted_R2": metrics.get("Adjusted_R2"),
+                        #     "Dependent_Variable": input_collect.get("dep_var", [""])[0],
+                        #     "Adstock_Type": input_collect.get("adstock", [""])[0],
+                        #     "Paid_Media_Variables": input_collect.get("paid_media_vars", []),
+                        #     "Control_Variables": input_collect.get("context_vars", []),
+                        #     "Date_Variable": input_collect.get("date_var", [""])[0],
+                        #     "Prophet_Variables": input_collect.get("prophet_vars", []),
+                        #     "Country": input_collect.get("prophet_country", [""])[0],
+                        #     "Iterations": model_collect.get("iterations", [None])[0],
+                        #     "Trials": model_collect.get("trials", [None])[0],
+                        #     "Total_Observations": input_collect.get("totalObservations", [None])[0],
+                        #     "Train_Window_Start": input_collect.get("window_start", [""])[0],
+                        #     "Train_Window_End": input_collect.get("window_end", [""])[0],
+                        #     "Robyn_Version": input_collect.get("version", [""])[0],
+                        #     "Training_Timestamp": model_collect.get("train_timestamp", [""])[0]
+                        # }
+                        #
+                        # # Save as Pickle
+                        # with open(pickle_path, "wb") as f:
+                        #     pickle.dump(enhanced_model_info, f)
+                        #
+                        # print(f"✅ Enhanced model metadata saved to: {pickle_path}")
+                                        # worked ends
 
                         output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
                         plot_path = os.path.join(output_dir, "plots")
-                        model_metrics_path = os.path.join(output_dir, "model_metrics.json")
-                        best_model_metrics_path = os.path.join(output_dir, "Best_Models")
+                        pickle_dir = os.path.join(output_dir, "pickles")
 
+                        # Make sure the pickles directory exists
+                        os.makedirs(pickle_dir, exist_ok=True)
+
+                        # Step 1: Find the latest folder in plots directory
+                        experiment_folders = [f for f in glob.glob(os.path.join(plot_path, "*")) if os.path.isdir(f)]
+                        if not experiment_folders:
+                            st.error("❌ No folders found in plots directory.")
+                        else:
+                            latest_folder = max(experiment_folders, key=os.path.getmtime)
+                            folder_name = os.path.basename(latest_folder)
+                            st.info(f"🕵️ Using latest folder: `{folder_name}`")
+
+                            # Define paths to the required files
+                            model_info_path = os.path.join(latest_folder, "RobynModel-models.json")
+                            metrics_path = os.path.join(latest_folder, "model_metrics.json")
+
+                            if os.path.exists(model_info_path) and os.path.exists(metrics_path):
+                                with open(model_info_path, "r") as f:
+                                    full_model = json.load(f)
+
+                                with open(metrics_path, "r") as f:
+                                    metrics = json.load(f)
+
+                                input_collect = full_model.get("InputCollect", {})
+                                models_collect = full_model.get("ModelsCollect", {})
+
+                                enriched_models = []
+                                for model_id, metric in metrics.get("model_metrics", {}).items():
+                                    enriched_model_info = {
+                                        "Model_ID": model_id,
+                                        "NRMSE": metric.get("NRMSE"),
+                                        "Adjusted_R2": metric.get("Decomp.R.squared"),
+                                        "Dependent_Variable": input_collect.get("dep_var", [""])[0],
+                                        "Adstock_Type": input_collect.get("adstock", [""])[0],
+                                        "Paid_Media_Variables": input_collect.get("paid_media_vars", []),
+                                        "Control_Variables": input_collect.get("context_vars", []),
+                                        "Date_Variable": input_collect.get("date_var", [""])[0],
+                                        "Prophet_Variables": input_collect.get("prophet_vars", []),
+                                        "Country": input_collect.get("prophet_country", [""])[0],
+                                        "Iterations": models_collect.get("iterations", [None])[0],
+                                        "Trials": models_collect.get("trials", [None])[0],
+                                        "Total_Observations": input_collect.get("totalObservations", [None])[0],
+                                        "Train_Window_Start": input_collect.get("window_start", [""])[0],
+                                        "Train_Window_End": input_collect.get("window_end", [""])[0],
+                                        "Robyn_Version": input_collect.get("version", [""])[0],
+                                        "Training_Timestamp": models_collect.get("train_timestamp", [""])[0]
+                                    }
+                                    enriched_models.append(enriched_model_info)
+
+                                # Save to pickles folder
+                                pickle_path = os.path.join(pickle_dir, f"{folder_name}.pkl")
+                                with open(pickle_path, "wb") as f:
+                                    pickle.dump(enriched_models, f)
+
+                                st.success(f"✅ Saved enriched models to: `{pickle_path}`")
+                            else:
+                                st.error(f"❌ Required files not found in latest folder: `{folder_name}`")
+                        # Locate latest updated folder in plot_path
+                        # if os.path.exists(plot_path):
+                        #     subdirs = [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
+                        #                os.path.isdir(os.path.join(plot_path, d))]
+                        #     if subdirs:
+                        #         latest_plot_folder = max(subdirs, key=os.path.getmtime)
+                        #         st.subheader("Model Visualizations")
+                        #         plot_files = sorted([f for f in os.listdir(latest_plot_folder) if f.endswith(".png")])
+                        #         for plot_file in plot_files:
+                        #             st.write(f"**{plot_file}**")
+                        #             st.image(os.path.join(latest_plot_folder, plot_file))
+                        if os.path.exists(best_model_path):
+                            png_files = [os.path.join(best_model_path, f) for f in os.listdir(best_model_path) if
+                                         f.endswith(".png")]
+                            if png_files:
+                                latest_best_model_img = max(png_files, key=os.path.getmtime)
+                                st.subheader("🏆 Best Model")
+                                st.image(latest_best_model_img)
                         if os.path.exists(plot_path):
-                            st.subheader("Model Visualizations")
-                            plot_files = sorted([f for f in os.listdir(plot_path) if f.endswith(".png")])
-                            for plot_file in plot_files:
-                                st.write(f"**{plot_file}**")
-                                st.image(os.path.join(plot_path, plot_file))
+                            subdirs = [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
+                                       os.path.isdir(os.path.join(plot_path, d))]
+                            if subdirs:
+                                latest_plot_folder = max(subdirs, key=os.path.getmtime)
+                                st.info("📊 Download all the model output")
 
-                        summary_path = os.path.join(output_dir, "summary.txt")
-                        if os.path.exists(summary_path):
-                            with open(summary_path, "r", encoding='utf-8') as f:
-                                st.subheader("Model Summary")
-                                st.text(f.read())
+                                # 🔽 Create a ZIP archive of the folder in memory
+                                zip_buffer = io.BytesIO()
+                                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                    for root, _, files in os.walk(latest_plot_folder):
+                                        for file in files:
+                                            file_path = os.path.join(root, file)
+                                            arcname = os.path.relpath(file_path,
+                                                                      latest_plot_folder)  # Store relative path
+                                            zip_file.write(file_path, arcname)
 
-                        corr_path = os.path.join(output_dir, "correlations.txt")
-                        if os.path.exists(corr_path):
-                            with open(corr_path, "r", encoding='utf-8') as f:
-                                st.write("Variable correlations with target:", f.read().splitlines())
-                        input_path = os.path.join(output_dir, "inputs.txt")
-                        if os.path.exists(input_path):
-                            with open(input_path, "r", encoding='utf-8') as f:
-                                st.write("Inputs used:", f.read().splitlines())
-                        hyper_path = os.path.join(output_dir, "hyperparameters.txt")
-                        if os.path.exists(hyper_path):
-                            with open(hyper_path, "r", encoding='utf-8') as f:
-                                st.write("Hyperparameters used:", f.read().splitlines())
+                                zip_buffer.seek(0)  # Move to start of the buffer
+
+                                # 💾 Provide download button
+                                st.download_button(
+                                    label="📥 Download Model Plots (ZIP)",
+                                    data=zip_buffer,
+                                    file_name="model_plots.zip",
+                                    mime="application/zip"
+                                )
+                                # input for budget optimization
+                                # 📌 Input box to capture the best model ID
+                    #     best_model_id = st.text_input("Enter the Best Model ID to Save:",
+                    #                                   placeholder="e.g., 4_190_9")
+                    #
+                    #     # 📌 Input box to capture the best model ID
+                    #     best_model_id = st.text_input("Enter the Best Model ID to Save:", placeholder="e.g., 4_190_9")
+                    #
+                    #     if best_model_id:
+                    #         st.session_state.best_model_id = best_model_id  # ✅ Save input to session
+                    #         model_json_path = os.path.join(output_dir, "model.json")
+                    #         model_data = {"selected_model_id": best_model_id}
+                    #
+                    #         try:
+                    #             with open(model_json_path, "w") as f:
+                    #                 json.dump(model_data, f, indent=4)
+                    #             st.success(f"✅ Saved selected model ID to {model_json_path}")
+                    #             st.session_state.model_id_saved = True  # ✅ Trigger budget button display
+                    #
+                    #         except Exception as e:
+                    #             st.error(f"❌ Failed to save model ID: {e}")
+                    #
+                    # # ✅ Show budget optimization button if model ID saved
+                    # if st.session_state.get("model_id_saved"):
+                    #     if st.button("🚀 Run Budget Optimization"):
+                    #         try:
+                    #             results = subprocess.run(
+                    #                 ["Rscript", r"C:/Users/MM3815/Documents/MMM_Auto/BOtwo.R"],
+                    #                 capture_output=True,
+                    #                 text=True
+                    #             )
+                    #             if results.returncode == 0:
+                    #                 st.success("✅ Budget optimization completed successfully.")
+                    #                 st.text_area("R Output", results.stdout, height=300)
+                    #             else:
+                    #                 st.error("❌ Budget optimization failed.")
+                    #                 st.text_area("R Error Output", results.stderr, height=300)
+                    #         except Exception as e:
+                    #             st.error(f"❌ Failed to run R script: {e}")
+
+                        # Show model summary
                     else:
 
-                        error_msg = process.stderr.read()
-                        st.error(f"Modeling failed: {error_msg}")
-                        if "not converged" in error_msg.lower():
-                            st.warning(
-                                "Model did not converge (DECOMP.RSSD or NRMSE issues). Try wider hyperparameter ranges, more iterations, or different media variables.")
-                        elif "coefficient = 0" in error_msg.lower():
-                            st.warning(
-                                "Zero coefficients detected. Check robyn_output/correlations.txt for weak predictors.")
-                        elif "argument is of length zero" in error_msg.lower():
-                            st.warning(
-                                "Generic error, likely due to plotting or empty results. Check robyn_log.txt for details.")
-                        st.info("""
-                                            **Troubleshooting Tips:**
-                                            1. Use R 4.4.2 (confirmed working locally).
-                                            2. Run in R:
-                                               ```R
-                                               install.packages(c('Robyn', 'dplyr', 'jsonlite', 'ggplot2', 'doSNOW'), dependencies=TRUE)""")
+                        st.error("❌ Modeling failed.")
+
+                        # Display actual stderr output from R
+
+                        if result.stderr:
+                            st.code(result.stderr, language='bash')  # Styled error output
+
+                        # Add common error-specific messages
+
+                        if "not converged" in result.stderr.lower():
+
+                            st.warning("⚠️ Model did not converge. Try increasing iterations or adjusting variables.")
+
+                        elif "coefficient = 0" in result.stderr.lower():
+
+                            st.warning("⚠️ Zero coefficients detected. Some predictors might be weak or irrelevant.")
+
+                        elif "argument is of length zero" in result.stderr.lower():
+
+                            st.warning("⚠️ Generic error encountered. Check `robyn_log.txt` for more insights.")
+
 
                 except Exception as e:
                     st.error(f"Unexpected error: {str(e)}")
                 finally:
                     if os.path.exists(data_path):
                         os.unlink(data_path)
+
+        output_dir = "robyn_output"
+        os.makedirs(output_dir, exist_ok=True)
+        budget_opt_dir = os.path.join(output_dir, "budget_optimization")
+        # 📌 Input box to capture the best model ID
+        best_model_id = st.text_input(
+            "Enter the Best Model ID to Save:",
+            placeholder="e.g., 4_190_9",
+            key="best_model_input"
+        )
+
+        if best_model_id:
+            st.session_state.best_model_id = best_model_id  # ✅ Save input to session
+            model_json_path = os.path.join(output_dir, "model.json")
+            model_data = {"model_id": best_model_id}
+
+            try:
+                with open(model_json_path, "w") as f:
+                    json.dump(model_data, f, indent=4)
+                st.success(f"✅ Saved selected model ID to {model_json_path}")
+                st.session_state.model_id_saved = True  # ✅ Trigger budget button display
+
+            except Exception as e:
+                st.error(f"❌ Failed to save model ID: {e}")
+
+        # ✅ Show budget optimization button if model ID saved
+    if st.session_state.get("model_id_saved"):
+        if st.button("🚀 Run Budget Optimization"):
+            try:
+                results = subprocess.run(
+                    ["Rscript", r"C:/Users/MM3815/Documents/MMM_Auto/BOtwo.R"],
+                    capture_output=True,
+                    text=True
+                )
+                if results.returncode == 0:
+                    st.success("✅ Budget optimization completed successfully.")
+
+                    # Get all subfolders in the budget optimization directory
+                    folders = [os.path.join(budget_opt_dir, f) for f in os.listdir(budget_opt_dir) if
+                               os.path.isdir(os.path.join(budget_opt_dir, f))]
+
+                    if not folders:
+                        st.warning("⚠️ No folders found in budget optimization directory.")
+                    else:
+                        # Find the most recently modified folder
+                        latest_folder = max(folders, key=os.path.getmtime)
+
+                        st.write("### Displaying budget optimization plots ")
+
+                        # Find all PNG files in the latest folder
+                        png_files = sorted(glob.glob(os.path.join(latest_folder, "*.png")))
+
+                        if not png_files:
+                            st.warning("⚠️ No PNG files found in the latest budget optimization folder.")
+                        else:
+                            for img_path in png_files:
+                                st.image(img_path, use_column_width=True)
+                else:
+                    st.error("❌ Budget optimization failed.")
+                    st.text_area("R Error Output", results.stderr, height=300)
+            except Exception as e:
+                st.error(f"❌ Failed to run R script: {e}")
+
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -559,15 +765,34 @@ elif st.session_state.current_step == 6:
                 st.session_state.current_step = 6
                 st.rerun()
         with col3:
-            if st.button("🔄 History"):
+            if st.button("📜 History"):
                 st.session_state.current_step = 7
                 st.rerun()
+
+
+# elif st.session_state.current_step == 7:
+#     st.header("📜 Modeling History")
+#
+#     output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+#     history_path = os.path.join(output_dir, "all_experiments.json")
+#
+#     if os.path.exists(history_path):
+#         with open(history_path, "r", encoding="utf-8") as f:
+#             experiments = json.load(f)
+#
+#         if experiments:
+#             df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
+#             df_history.rename(columns={"index": "Experiment"}, inplace=True)
+#             st.dataframe(df_history)
+#         else:
+#             st.info("No experiments found in history.")
 
 elif st.session_state.current_step == 7:
     st.header("📜 Modeling History")
 
     output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
     history_path = os.path.join(output_dir, "all_experiments.json")
+    plot_path = os.path.join(output_dir, "plots")
 
     if os.path.exists(history_path):
         with open(history_path, "r", encoding="utf-8") as f:
@@ -575,13 +800,48 @@ elif st.session_state.current_step == 7:
 
         if experiments:
             df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
-            df_history.rename(columns={"index": "Experiment"}, inplace=True)
-            st.dataframe(df_history)
+
+            desired_order = [
+                "index", "User", "Project_Name", "Timestamp", "Spend_variables",
+                "Control_variables", "Adstock", "Iterations", "Trials"
+            ]
+            df_history = df_history[desired_order]
+
+            st.dataframe(df_history, use_container_width=True)
+
+            # 🔽 Select and download experiment by folder name
+            st.subheader("📁 Select Experiment ID to Download")
+
+            # Build folder prefix list and check for matches in plots
+            experiment_options = {}
+            for i, row in df_history.iterrows():
+                user = row['User']
+                project = row['Project_Name']
+                exp_id = row['index']
+                folder_prefix = f"{user}~{project}~{exp_id}"
+
+                matching_folders = glob.glob(os.path.join(plot_path, f"{folder_prefix}*"))
+                if matching_folders:
+                    experiment_options[exp_id] = matching_folders[0]  # Use experiment ID as dropdown label
+
+            if experiment_options:
+                selected_exp = st.selectbox("Select an Experiment ID", options=list(experiment_options.keys()))
+                if selected_exp:
+                    zip_buffer = create_zip_buffer(experiment_options[selected_exp])
+                    st.download_button(
+                        label=f"📥 Download {selected_exp}.zip",
+                        data=zip_buffer,
+                        file_name=f"{selected_exp}.zip",
+                        mime="application/zip"
+                    )
+            else:
+                st.info("No matching experiment folders found in the 'plots' directory.")
         else:
             st.info("No experiments found in history.")
     else:
         st.warning("History file (all_experiments.json) not found.")
 
+    # Navigation Buttons
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⬅️ Back to Modeling"):
@@ -592,12 +852,66 @@ elif st.session_state.current_step == 7:
             st.session_state.current_step = 1
             st.rerun()
 
-            # Always show available PNG outputs (even if modeling failed)
-            # output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
-            # plot_path = os.path.join(output_dir, "plots")
-            #
-            # if os.path.exists(plot_path):
-            #     st.subheader("🖼️ Available Robyn Output Images")
-            #     plot_files = sorted([f for f in os.listdir(plot_path) if f.endswith(".png")])
-            #     for plot_file in plot_files:
-            #         st.image(os.path.join(plot_path, plot_file), caption=plot_file, use_column_width=True)
+# elif st.session_state.current_step == 7:
+#     st.header("📜 Modeling History")
+#
+#     output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+#     history_path = os.path.join(output_dir, "all_experiments.json")
+#
+#     if os.path.exists(history_path):
+#         with open(history_path, "r", encoding="utf-8") as f:
+#             experiments = json.load(f)
+#
+#         if experiments:
+#             df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
+#
+#             desired_order = [
+#                 "index", "User", "Project_Name", "Timestamp", "Spend_variables",
+#                 "Control_variables", "Adstock", "Iterations", "Trials"
+#             ]
+#             df_history = df_history[desired_order]
+#             plot_path = os.path.join(output_dir, "plots")
+#
+#             st.markdown("### 🔍 Experiment List")
+#
+#             for i, row in df_history.iterrows():
+#                 user = row['User']
+#                 project = row['Project_Name']
+#                 exp_id = row['index']
+#                 folder_prefix = f"{user}~{project}~{exp_id}"
+#                 matching_folders = glob.glob(os.path.join(plot_path, f"{folder_prefix}*"))
+#
+#                 with st.expander(f"📁 Project: {project} | User: {user} | ID: {exp_id}"):
+#                     st.write(f"🕒 Timestamp: `{row['Timestamp']}`")
+#                     st.write(f"💰 Spend Variables: `{row['Spend_variables']}`")
+#                     st.write(f"🎛 Control Variables: `{row['Control_variables']}`")
+#                     st.write(f"🔄 Adstock: `{row['Adstock']}` | 🧪 Iterations: `{row['Iterations']}` | 🎲 Trials: `{row['Trials']}`")
+#
+#                     if matching_folders:
+#                         folder_path = matching_folders[0]
+#                         zip_buffer = create_zip_buffer(folder_path)
+#                         st.download_button(
+#                             label="📥 Download Model Output",
+#                             data=zip_buffer,
+#                             file_name=f"{folder_prefix}.zip",
+#                             mime="application/zip",
+#                             key=f"download_zip_{i}"
+#                         )
+#                     else:
+#                         st.error("❌ No folder found for this experiment.")
+#
+#         else:
+#             st.info("No experiments found in history.")
+#     else:
+#         st.warning("History file (all_experiments.json) not found.")
+#
+#     # Navigation
+#     col1, col2 = st.columns(2)
+#     with col1:
+#         if st.button("⬅️ Back to Modeling"):
+#             st.session_state.current_step = 6
+#             st.rerun()
+#     with col2:
+#         if st.button("🏠 Back to Home"):
+#             st.session_state.current_step = 1
+#             st.rerun()
