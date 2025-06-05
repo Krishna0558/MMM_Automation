@@ -4,24 +4,24 @@ import streamlit as st
 import pandas as pd
 import io
 import numpy as np
-import plotly.express as px
-from robyn import Robyn
 from datetime import datetime
-import pyreadr
-import pickle
 import subprocess
 import tempfile
 import os
-import shutil
-from io import BytesIO
 import zipfile
-import streamlit.components.v1 as components
-import time
 import json
-from Missing_Imputation import handle_missing_values_ui
-from Outliers import detect_outliers_ui
-from Visualizations import show_visualizations
-from Data_Insights import show_data_insights
+from src.Missing_Imputation import handle_missing_values_ui
+from src.Outliers import detect_outliers_ui
+from src.Visualizations import show_visualizations
+from src.Data_Insights import show_data_insights
+import yaml
+
+
+def fileconfig(path="config.yaml"):
+    with open(path,"r") as f:
+        return yaml.safe_load(f)
+
+
 
 # Initialize session state
 if 'current_step' not in st.session_state:
@@ -473,74 +473,7 @@ elif st.session_state.current_step == 6:
                         st.success("🎉 Modeling completed successfully!")
                         st.session_state.modeling_done = True  # ✅ Set this flag
 
-                        # Continue with your logic: load metrics, show plots etc.
-                            # worked code for pickel
-                        # metrics_path = os.path.join(output_dir, "model_metrics.json")
-                        # model_info_path = os.path.join(output_dir, "RobynModel-models.json")
-                        # pickle_path = os.path.join(output_dir, "best_model_enhanced.pkl")
-                        #
-                        # # Load JSON files
-                        # with open(metrics_path, "r") as f:
-                        #     metrics = json.load(f)
-                        #
-                        # with open(model_info_path, "r") as f:
-                        #     full_model = json.load(f)
-                        #
-                        # # Extract enriched details
-                        # input_collect = full_model.get("InputCollect", {})
-                        # model_collect = full_model.get("ModelsCollect", {})
-                        #
-                        # enhanced_model_info = {
-                        #     "Model_ID": metrics.get("Model_ID"),
-                        #     "NRMSE": metrics.get("NRMSE"),
-                        #     "Adjusted_R2": metrics.get("Adjusted_R2"),
-                        #     "Dependent_Variable": input_collect.get("dep_var", [""])[0],
-                        #     "Adstock_Type": input_collect.get("adstock", [""])[0],
-                        #     "Paid_Media_Variables": input_collect.get("paid_media_vars", []),
-                        #     "Control_Variables": input_collect.get("context_vars", []),
-                        #     "Date_Variable": input_collect.get("date_var", [""])[0],
-                        #     "Prophet_Variables": input_collect.get("prophet_vars", []),
-                        #     "Country": input_collect.get("prophet_country", [""])[0],
-                        #     "Iterations": model_collect.get("iterations", [None])[0],
-                        #     "Trials": model_collect.get("trials", [None])[0],
-                        #     "Total_Observations": input_collect.get("totalObservations", [None])[0],
-                        #     "Train_Window_Start": input_collect.get("window_start", [""])[0],
-                        #     "Train_Window_End": input_collect.get("window_end", [""])[0],
-                        #     "Robyn_Version": input_collect.get("version", [""])[0],
-                        #     "Training_Timestamp": model_collect.get("train_timestamp", [""])[0]
-                        # }
-                        #
-                        # # Save as Pickle
-                        # with open(pickle_path, "wb") as f:
-                        #     pickle.dump(enhanced_model_info, f)
-                        #
-                        # print(f"✅ Enhanced model metadata saved to: {pickle_path}")
-                                        # worked ends
 
-
-
-                        # Replace with your actual path
-                        # result = pyreadr.read_r(r"C:\Users\MM3815\Downloads\data_cleaning_app\robyn_output\all_models.rds")
-
-                        # This returns a dictionary-like object
-                        # Usually, the key will be the name of the saved R object
-                        # ------------------------------------------------------------------
-                        # output_models = list(result.values())[0]
-                        # with open(r'C:\Users\MM3815\Downloads\data_cleaning_app\robyn_output\best_model_enhanced.pkl', 'wb') as f:
-                        #     pickle.dump(output_models, f)
-                        # Extract the data.frame or list
-
-                        # Locate latest updated folder in plot_path
-                        # if os.path.exists(plot_path):
-                        #     subdirs == [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
-                        #                os.path.isdir(os.path.join(plot_path, d))]
-                        #     if subdirs:
-                        #         latest_plot_folder = max(subdirs, key=os.path.getmtime)
-                        #         st.subheader("Model Visualizations")
-                        #         plot_files = sorted([f for f in os.listdir(latest_plot_folder) if f.endswith(".png")])
-                        #         for plot_file in plot_files:
-                        #             st.write(f"**{plot_file}**")
-                        #             st.image(os.path.join(latest_plot_folder, plot_file))
                         if os.path.exists(best_model_path):
                             png_files = [os.path.join(best_model_path, f) for f in os.listdir(best_model_path) if
                                          f.endswith(".png")]
@@ -574,45 +507,6 @@ elif st.session_state.current_step == 6:
                                     file_name="model_plots.zip",
                                     mime="application/zip"
                                 )
-                                # input for budget optimization
-                                # 📌 Input box to capture the best model ID
-                    #     best_model_id = st.text_input("Enter the Best Model ID to Save:",
-                    #                                   placeholder="e.g., 4_190_9")
-                    #
-                    #     # 📌 Input box to capture the best model ID
-                    #     best_model_id = st.text_input("Enter the Best Model ID to Save:", placeholder="e.g., 4_190_9")
-                    #
-                    #     if best_model_id:
-                    #         st.session_state.best_model_id = best_model_id  # ✅ Save input to session
-                    #         model_json_path = os.path.join(output_dir, "model.json")
-                    #         model_data = {"selected_model_id": best_model_id}
-                    #
-                    #         try:
-                    #             with open(model_json_path, "w") as f:
-                    #                 json.dump(model_data, f, indent=4)
-                    #             st.success(f"✅ Saved selected model ID to {model_json_path}")
-                    #             st.session_state.model_id_saved = True  # ✅ Trigger budget button display
-                    #
-                    #         except Exception as e:
-                    #             st.error(f"❌ Failed to save model ID: {e}")
-                    #
-                    # # ✅ Show budget optimization button if model ID saved
-                    # if st.session_state.get("model_id_saved"):
-                    #     if st.button("🚀 Run Budget Optimization"):
-                    #         try:
-                    #             results = subprocess.run(
-                    #                 ["Rscript", r"C:/Users/MM3815/Documents/MMM_Auto/BOtwo.R"],
-                    #                 capture_output=True,
-                    #                 text=True
-                    #             )
-                    #             if results.returncode == 0:
-                    #                 st.success("✅ Budget optimization completed successfully.")
-                    #                 st.text_area("R Output", results.stdout, height=300)
-                    #             else:
-                    #                 st.error("❌ Budget optimization failed.")
-                    #                 st.text_area("R Error Output", results.stderr, height=300)
-                    #         except Exception as e:
-                    #             st.error(f"❌ Failed to run R script: {e}")
 
                         # Show model summary
                     else:
@@ -668,19 +562,7 @@ elif st.session_state.current_step == 6:
             fixed_budget = st.number_input("Enter your fixed budget value:", min_value=0.0, step=100.0)
             st.success(f"Fixed budget selected: {fixed_budget}")
 
-        # Step 2: Optional - Customized Constraints Budget
-        # constraints = None
-        # with st.expander("➕ Optional: Customized Constraints Budget"):
-        #     lower = st.number_input("Enter lower constraint:", min_value=0.0, step=0.5, key="lower")
-        #     upper = st.number_input("Enter upper constraint:", min_value=0.0, step=0.5, key="upper")
-        #     if lower > upper:
-        #         st.error("Lower constraint cannot be greater than upper constraint!")
-        #     else:
-        #         if lower > 0.0 or upper > 0.0:
-        #             constraints = {"lower": lower, "upper": upper}
-        #             st.info(f"Constraint Range: {lower} to {upper}")
-        #         else:
-        #             constraints = None  # Explicitly set to None if both are 0
+
         constraints = {}
         with st.expander("➕ Optional: Customized Constraints Budget"):
             st.write("Set lower and upper constraints for each media variable:")
@@ -752,7 +634,7 @@ elif st.session_state.current_step == 6:
         if st.button("🚀 Run Budget Optimization"):
             try:
                 results = subprocess.run(
-                    ["Rscript", r"C:/Users/MM3815/Documents/MMM_Auto/BOtwo.R"],
+                    ["Rscript", r"C:\Users\MM3815\Downloads\data_cleaning_app\Budgetoptimizer.R"],
                     capture_output=True,
                     text=True
                 )
