@@ -1,0 +1,234 @@
+#!/usr/bin/env Rscript
+args <- commandArgs(trailingOnly = TRUE)
+
+# Set explicit user-writable library path
+personal_lib <- "C:/Users/MM3815/Documents/R/library"
+if (!dir.exists(personal_lib)) dir.create(personal_lib, recursive = TRUE)
+.libPaths(personal_lib)  # Use only the user library to avoid system library issues
+
+# List of required packages
+required_packages <- c("Robyn", "dplyr", "jsonlite", "ggplot2", "doSNOW")
+
+# Check for missing packages
+missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
+if (length(missing_packages) > 0) {
+  stop("Error: The following required packages are missing: ", paste(missing_packages, collapse = ", "),
+       "\nPlease install them manually in R with:\n",
+       "install.packages(c('", paste(missing_packages, collapse = "', '"), "'), dependencies = TRUE, lib = '", personal_lib, "')")
+}
+
+# Load packages quietly
+for (pkg in required_packages) {
+  suppressPackageStartupMessages(library(pkg, character.only = TRUE, quietly = TRUE))
+}
+
+# Log Robyn version
+message("Robyn version: ", packageVersion("Robyn"))
+
+# If no command-line arguments, try reading from robyn_output/config.json
+if (length(args) == 0) {
+  config_path <- "robyn_output/config.json"
+  if (file.exists(config_path)) {
+    message("No command-line arguments provided. Reading from ", config_path)
+    config <- jsonlite::fromJSON(config_path)
+    args <- c(
+      config$data_path,
+      config$dep_var,
+      config$media_vars,
+      config$control_vars,
+      config$date_var,
+      config$adstock_type,
+      config$iterations,
+      config$trials
+    )
+  } else {
+    stop("Error: No command-line arguments provided, and ", config_path, " does not exist.")
+  }
+}
+
+# Validate number of arguments
+if (length(args) < 8) {
+  stop("Error: Insufficient arguments. Expected 8 arguments: ",
+       "data_path, dep_var, media_vars, control_vars, date_var, adstock_type, iterations, trials")
+}
+
+# Parse arguments with error handling
+data_path <- args[1]
+dep_var <- args[2]
+media_vars <- unlist(strsplit(args[3], ","))
+control_vars <- if (is.na(args[4]) || args[4] == "" || args[4] == "none") NULL else unlist(strsplit(args[4], ","))
+date_var <- if (is.na(args[5]) || args[5] == "" || args[5] == "none") NULL else args[5]
+adstock_type <- args[6]
+iterations <- as.integer(args[7])
+trials <- as.integer(args[8])
+
+# Validate parsed arguments
+if (is.na(iterations) || iterations <= 0) stop("Error: iterations must be a positive integer")
+if (is.na(trials) || trials <= 0) stop("Error: trials must be a positive integer")
+if (length(media_vars) == 0) stop("Error: media_vars cannot be empty")
+if (!adstock_type %in% c("geometric", "weibull")) stop("Error: adstock_type must be 'geometric' or 'weibull'")
+
+# Load data
+data <- read.csv(data_path)
+if (!is.null(date_var)) data[[date_var]] <- as.Date(data[[date_var]])
+
+# Validate data size (minimum 104 weeks for weekly data)
+if (!is.null(date_var)) {
+  data[[date_var]] <- as.Date(data[[date_var]])
+  weeks <- length(unique(data[[date_var]]))
+  #if (weeks < 104) {
+    #stop("Error: Insufficient data. Weekly MMM requires at least 104 weeks, but only ", round(weeks, 2), " weeks found.")
+  #}
+}
+
+# Clean column names
+colnames(data) <- make.names(colnames(data), unique = TRUE)
+dep_var <- make.names(dep_var)
+media_vars <- make.names(media_vars)
+if (!is.null(control_vars)) control_vars <- make.names(control_vars)
+if (!is.null(date_var)) date_var <- make.names(date_var)
+
+# Debug: Log inputs
+message("Media variables: ", paste(media_vars, collapse = ", "))
+message("Control variables: ", if(is.null(control_vars)) "none" else paste(control_vars, collapse = ", "))
+message("Dependent variable: ", dep_var)
+message("Date variable: ", if(is.null(date_var)) "none" else date_var)
+message("Adstock type: ", adstock_type)
+message("Iterations: ", iterations)
+message("Trials: ", trials)
+
+# Data preprocessing: Check correlations
+message("Calculating correlations with dependent variable...")
+correlations <- sapply(c(media_vars, control_vars), function(var) {
+  cor(data[[var]], data[[dep_var]], use = "complete.obs")
+})
+writeLines(paste(names(correlations), correlations, sep = ": "), file.path("robyn_output", "correlations.txt"))
+message("Correlations saved to robyn_output/correlations.txt")
+
+# Check for low correlations
+low_corr_vars <- names(correlations)[abs(correlations) < 0.1]
+if (length(low_corr_vars) > 0) {
+  message("Warning: The following variables have low correlation (< 0.1) with ", dep_var, ": ",
+          paste(low_corr_vars, collapse = ", "))
+}
+
+# Set hyperparameters with wider ranges
+hyperparameters <- list(
+  train_size = c(0.5, 0.9)
+)
+if (adstock_type == "geometric") {
+  for (media_var in media_vars) {
+    hyperparameters[[paste0(media_var, "_alphas")]] <- c(0.001, 4)
+    hyperparameters[[paste0(media_var, "_gammas")]] <- c(0.2, 0.95)
+    hyperparameters[[paste0(media_var, "_thetas")]] <- c(0.01, 0.5)
+  }
+} else if (adstock_type == "weibull") {
+  for (media_var in media_vars) {
+    hyperparameters[[paste0(media_var, "_shapes")]] <- c(0.0001, 3)
+    hyperparameters[[paste0(media_var, "_scales")]] <- c(0.05, 5)
+    hyperparameters[[paste0(media_var, "_gammas")]] <- c(0.2, 0.95)
+  }
+}
+message("Hyperparameters: ", paste(names(hyperparameters), collapse = ", "))
+
+# Save hyperparameters and inputs for debugging
+writeLines(paste(names(hyperparameters), collapse = "\n"), file.path("robyn_output", "hyperparameters.txt"))
+writeLines(c(
+  paste("Robyn version:", packageVersion("Robyn")),
+  paste("Media variables:", paste(media_vars, collapse = ", ")),
+  paste("Control variables:", if(is.null(control_vars)) "none" else paste(control_vars, collapse = ", ")),
+  paste("Dependent variable:", dep_var),
+  paste("Date variable:", if(is.null(date_var)) "none" else date_var),
+  paste("Adstock type:", adstock_type),
+  paste("Iterations:", iterations),
+  paste("Trials:", trials)
+), file.path("robyn_output", "inputs.txt"))
+
+# Create output directory
+output_dir <- "robyn_output"
+dir.create(output_dir, showWarnings = FALSE)
+dir.create(file.path(output_dir, "plots"), showWarnings = FALSE)
+
+# Suppress warnings
+options(warn = -1)
+tryCatch({
+  # Debug: Save input data
+  write.csv(data, file.path(output_dir, "input_data.csv"), row.names = FALSE)
+
+  message("Starting robyn_inputs")
+  InputCollect <- Robyn::robyn_inputs(
+    dt_input = data,
+    dt_holidays = Robyn::dt_prophet_holidays,
+    date_var = date_var,
+    dep_var = dep_var,
+    dep_var_type = "revenue",
+    prophet_vars = c("trend", "season", "holiday"),
+    prophet_country = "US",
+    context_vars = control_vars,
+    paid_media_spends = media_vars,
+    paid_media_vars = media_vars,
+    adstock = adstock_type,
+    hyperparameters = hyperparameters,
+    cores = 1  # Single-core to avoid doSNOW issues
+  )
+  message("robyn_inputs completed")
+
+  message("Starting robyn_run")
+  OutputModels <- Robyn::robyn_run(
+    InputCollect = InputCollect,
+    iterations = iterations,
+    trials = trials,
+    cores = 1,  # Single-core to avoid doSNOW issues
+    ts_validation = FALSE,
+    verbose = TRUE
+  )
+  message("robyn_run completed")
+
+  # Check for zero coefficients
+  if (!is.null(OutputModels$allSolutions)) {
+    zero_coef_count <- sum(sapply(OutputModels$allSolutions, function(sol) all(sol$coef == 0)))
+    if (zero_coef_count > iterations * trials * 0.5) {
+      message("Warning: More than 50% of iterations (", zero_coef_count, " of ", iterations * trials,
+              ") have zero coefficients for all media variables. Check correlations.txt and consider different media variables.")
+    }
+  }
+
+  message("Starting robyn_outputs")
+  OutputCollect <- Robyn::robyn_outputs(
+    InputCollect, OutputModels,
+    pareto_fronts = 1,
+    plot_folder = file.path(output_dir, "plots"),
+    csv_out = "all",
+    cores = 1  # Single-core to avoid doSNOW issues
+  )
+  message("robyn_outputs completed")
+
+  # Save outputs
+  Robyn::robyn_save(
+    robyn_object = file.path(output_dir, "model.RDS"),
+    InputCollect = InputCollect,
+    OutputCollect = OutputCollect
+  )
+
+  # Generate summary
+  sink(file.path(output_dir, "summary.txt"))
+  print(OutputCollect)
+  sink()
+
+  # Generate plots
+  png(file.path(output_dir, "plots", "decomposition.png"), width = 1000, height = 800)
+  print(OutputCollect$plots$patches$plots[[1]])
+  dev.off()
+
+  png(file.path(output_dir, "plots", "response_curves.png"), width = 1000, height = 800)
+  print(OutputCollect$plots$response_plots)
+  dev.off()
+
+  message("Modeling completed successfully")
+  quit(status = 0)
+}, error = function(e) {
+  message("Modeling failed: ", e$message)
+  quit(status = 1)
+}, finally = {
+  options(warn = 0)
+})

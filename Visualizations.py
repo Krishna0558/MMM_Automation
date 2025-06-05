@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 
 def show_visualizations(df, target_var=None):
@@ -52,10 +53,36 @@ def show_visualizations(df, target_var=None):
     # 3. Correlation Heatmap
     with st.expander("Correlation Analysis", expanded=True):
         if len(num_cols) > 1:
+            # Compute the correlation matrix
             corr_matrix = df[num_cols].corr()
-            fig, ax = plt.subplots(figsize=(12, 8))
-            sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, ax=ax)
-            plt.title('Correlation Matrix')
-            st.pyplot(fig)
+
+            # Plot the heatmap
+            # fig, ax = plt.subplots(figsize=(12, 8))
+            # sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', center=0, ax=ax)
+            # plt.title('Correlation Matrix')
+            # st.pyplot(fig)
+
+            # Extract upper triangle of the correlation matrix without the diagonal
+            mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+            upper_corr = corr_matrix.where(mask)
+
+            # Flatten to pairwise format
+            corr_pairs = (
+                upper_corr.stack()
+                .reset_index()
+                .rename(columns={0: 'Correlation', 'level_0': 'Feature 1', 'level_1': 'Feature 2'})
+            )
+            corr_pairs['Abs Correlation'] = corr_pairs['Correlation'].abs()
+            # corr_pair['Abs Correlation'] = corr_pairs['Correlation'].abs()
+
+            # Get top 3 most and least correlated pairs
+            most_corr = corr_pairs.sort_values(by='Abs Correlation', ascending=False).head(3)
+            least_corr = corr_pairs.sort_values(by='Abs Correlation', ascending=True).head(3)
+
+            st.subheader("Most Highly Correlated Feature Pairs")
+            st.dataframe(most_corr[['Feature 1', 'Feature 2', 'Correlation']], hide_index=True)
+
+            st.subheader("Least Correlated Feature Pairs")
+            st.dataframe(least_corr[['Feature 1', 'Feature 2', 'Correlation']], hide_index=True)
         else:
             st.warning("Need at least 2 numerical columns for correlation analysis")

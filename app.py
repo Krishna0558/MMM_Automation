@@ -1,9 +1,27 @@
+import glob
+import re
 import streamlit as st
 import pandas as pd
 import io
+import numpy as np
+import plotly.express as px
+from robyn import Robyn
+from datetime import datetime
+import pyreadr
+import pickle
+import subprocess
+import tempfile
+import os
+import shutil
+from io import BytesIO
+import zipfile
+import streamlit.components.v1 as components
+import time
+import json
 from Missing_Imputation import handle_missing_values_ui
 from Outliers import detect_outliers_ui
 from Visualizations import show_visualizations
+from Data_Insights import show_data_insights
 
 # Initialize session state
 if 'current_step' not in st.session_state:
@@ -16,7 +34,8 @@ if 'cleaned_df' not in st.session_state:
     st.session_state.cleaned_df = None
 if 'outliers_treated_df' not in st.session_state:
     st.session_state.outliers_treated_df = None
-
+if 'insights_df' not in st.session_state:
+    st.session_state.insights_df = None
 
 def pivot_data(df, date_col, pivot_var, paid_organic_vars, target_var, time_granularity, control_vars):
     df[date_col] = pd.to_datetime(df[date_col])
@@ -38,34 +57,78 @@ def pivot_data(df, date_col, pivot_var, paid_organic_vars, target_var, time_gran
     pivoted = pivoted.reset_index()
 
     exclude_cols = [date_col, pivot_var] + paid_organic_vars
-    numeric_df = df.drop(columns=exclude_cols, errors='ignore').select_dtypes(include='number')
-    # others_summed = df[['Time_Period']].join(numeric_df).groupby('Time_Period').sum().reset_index()
     control_vars_df = df[['Time_Period'] + control_vars].groupby('Time_Period').sum().reset_index()
-    #added
     target_var_df = df[['Time_Period', target_var]].groupby('Time_Period').sum().reset_index()
 
-    # final_df = pd.merge(pivoted, others_summed, on='Time_Period', how='left')
     final_df = pd.merge(pivoted, control_vars_df, on='Time_Period', how='left')
-    #added
     final_df = pd.merge(final_df, target_var_df, on='Time_Period', how='left')
-
 
     return final_df.rename(columns={"Time_Period": "Date"})
 
+def clean_column_names(df):
+    def make_valid_name(name):
+        name = str(name).strip()
+        name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        name = re.sub(r'_+', '_', name)
+        # name = re.sub(r'_+', '_', name)
+        if name and name[0].isdigit():
+            name = f"var_{name}"
+        return name
+    df.columns = [make_valid_name(col) for col in df.columns]
+    return df
+
+
+@st.cache_data(show_spinner=False)
+
+def create_zip_buffer(folder_path):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, start=folder_path)
+                zipf.write(file_path, arcname)
+    buffer.seek(0)
+    return buffer
 
 # Main App
-st.title("📊 MMM Automation UI")
-st.header("Step 1: Upload and Transform Your Data")
-
+st.markdown("<h1 style='text-align: center;'>📊 MMM Automation Interface</h1>", unsafe_allow_html=True)
+# st.header("Step 1: Upload and Transform Your Data")
+#
 uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=['csv', 'xlsx'])
 
+
 if st.session_state.current_step == 1 and uploaded_file is not None:
+    st.header("Step 1: Upload and Transform Your Data")
+
+    # uploaded_file = st.file_uploader("Upload a CSV or Excel file", type=['csv', 'xlsx'])
     try:
         df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('csv') else pd.read_excel(uploaded_file)
 
         st.success("✅ File uploaded successfully!")
         st.subheader("Preview of Uploaded Data")
         st.dataframe(df.head())
+        st.subheader("Enter Project Details")
+
+        # 1️⃣ Input for Username
+        username = st.text_input("Enter your name")
+
+        # 2️⃣ Auto-filled Project Name (from file name)
+        default_project_name = os.path.splitext(uploaded_file.name)[0]
+        project_name = st.text_input("Edit project name if needed", value=default_project_name)
+
+        # 3️⃣ Create a DataFrame with these two columns
+        if username:
+            preview_df = pd.DataFrame({
+                "User Name": [username],
+                "Project Name": [project_name]
+            })
+            st.session_state["username"] = username
+            st.session_state["project_name"] = project_name
+            st.subheader("Project Details Preview")
+            st.dataframe(preview_df)
+        else:
+            st.info("Please enter your name to see the project details preview.")
 
         st.subheader("Step 2: Select Variables")
 
@@ -131,6 +194,7 @@ if st.session_state.current_step == 1 and uploaded_file is not None:
         if valid_date and valid_target and valid_pivot and valid_paid:
             if st.button("🔄 Transform Data"):
                 st.session_state["target_var"] = target_var
+                st.session_state["time_base"] = time_base
                 final_df = pivot_data(df, date_col, pivot_var, paid_organic_vars, target_var, time_base, control_vars)
                 st.session_state.final_df = final_df
                 st.session_state.transformed = True
@@ -141,57 +205,24 @@ if st.session_state.current_step == 1 and uploaded_file is not None:
                 row_count = len(final_df)
                 if time_base == "Weekly" and not (104 <= row_count <= 156):
                     st.error("⚠️ Insufficient Data: Weekly MMM requires 2 to 2.5 years of data, equating to 104–156 weeks.")
-                    # st.radio("Please choose an option:", ["Continue to the next step", "Re-upload the file"])
                 elif time_base == "Monthly" and not (36 <= row_count <= 48):
                     st.error("⚠️ Insufficient Data: Monthly MMM requires 3 to 4 years of data (36–48 monthly records).")
-                    # st.radio("Please choose an option:", ["Continue to the next step", "Re-upload the file"])
                 elif time_base == "Daily" and not (365 <= row_count <= 450):
                     st.error("⚠️ Insufficient Data: Daily MMM requires 1 to 1.25 years of data (365–450 daily records).")
-                    # st.radio("Please choose an option:", ["Continue to the next step", "Re-upload the file"])
 
         if st.session_state.transformed:
-            if st.button("➡️ Continue to Missing Value Treatment"):#chnage this to whole code
+            if st.button("➡️ Continue to Missing Value Treatment"):
                 st.session_state.current_step = 2
                 st.rerun()
-        # if st.session_state.transformed:
-        #     # Define the radio button and capture the selected option
-        #     user_choice = st.radio("Please choose an option:", ["Continue to the next step", "Re-upload the file"])
-        #
-        #     # If the user chooses to continue, move to the next step (Missing Value Treatment)
-        #     if user_choice == "Continue to the next step":
-        #         st.session_state.current_step = 2
-        #         st.rerun()
-
 
     except Exception as e:
         st.error(f"❌ Error: {str(e)}")
 
-# elif st.session_state.current_step == 2 and st.session_state.final_df is not None:
-#     st.session_state.cleaned_df = handle_missing_values_ui(st.session_state.final_df)
-#     if st.session_state.cleaned_df is not None and st.button("➡️ Proceed to Outlier Detection"):
-#         st.session_state.current_step = 3
-#         st.rerun()
-#
-# elif st.session_state.current_step == 3 and st.session_state.cleaned_df is not None:
-#     st.session_state.outliers_treated_df = detect_outliers_ui(st.session_state.cleaned_df)
-#     if st.session_state.outliers_treated_df is not None and st.button("➡️ Complete Pipeline"):
-#         st.session_state.current_step = 4
-#         st.balloons()
-#         st.success("🎉 Pipeline completed!")
-#
-# elif st.session_state.current_step == 4:
-#     st.header("Final Processed Data")
-#     st.dataframe(st.session_state.outliers_treated_df.head())
-
-# elif st.session_state.current_step == 2 and st.session_state.final_df is not None:
-#     st.session_state.cleaned_df = handle_missing_values_ui(st.session_state.final_df)
-# added for the not getting the correct data
 elif st.session_state.current_step == 2 and st.session_state.final_df is not None:
     cleaned = handle_missing_values_ui(st.session_state.final_df)
     if cleaned is not None:
         st.session_state.cleaned_df = cleaned
 
-    # Add navigation buttons here
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⬅️ Back to Data Transformation"):
@@ -205,42 +236,713 @@ elif st.session_state.current_step == 2 and st.session_state.final_df is not Non
 elif st.session_state.current_step == 3 and st.session_state.cleaned_df is not None:
     st.session_state.outliers_treated_df = detect_outliers_ui(st.session_state.cleaned_df)
 
-    # Add navigation buttons here
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⬅️ Back to Missing Values"):
             st.session_state.current_step -= 1
             st.rerun()
     with col2:
-        if st.session_state.outliers_treated_df is not None and st.button("➡️ Continue to step-5"):
+        if st.session_state.outliers_treated_df is not None and st.button("➡️ Continue to Visualizations"):
             st.session_state.current_step = 4
-            # st.balloons()
-            # st.success("🎉 Pipeline completed!")
             st.rerun()
-
-# elif st.session_state.current_step == 4:
-#     st.header("Final Processed Data")
-#     st.dataframe(st.session_state.outliers_treated_df.head())
-#
-#     # Add back button for final step
-#     if st.button("⬅️ Back to Outlier Treatment"):
-#         st.session_state.current_step -= 1
-#         st.rerun()
 
 elif st.session_state.current_step == 4:
     st.write(f"The dataset contains **{st.session_state.outliers_treated_df.shape[0]}** rows and **{st.session_state.outliers_treated_df.shape[1]}** columns.")
     st.header("Final Processed Data")
     st.dataframe(st.session_state.outliers_treated_df.head())
 
-    # Import and call the visualization function
-
-
     show_visualizations(
         df=st.session_state.outliers_treated_df,
         target_var=st.session_state.get("target_var", None)
     )
 
-    # Add back button
-    if st.button("⬅️ Back to Outlier Treatment"):
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ Back to Outlier Treatment"):
+            st.session_state.current_step -= 1
+            st.rerun()
+    with col2:
+        if st.button("➡️ Proceed to Data Insights"):
+            st.session_state.current_step = 5
+            st.rerun()
+
+elif st.session_state.current_step == 5:
+    st.header("Advanced Data Insights")
+    st.dataframe(st.session_state.outliers_treated_df.head())
+
+    num_cols = st.session_state.outliers_treated_df.select_dtypes(include=[np.number]).columns.tolist()
+    spend_var = st.multiselect("Select spend variables (for ROI analysis)", [None] + num_cols)
+    reach_var = st.selectbox("Select reach variable (for time-lag analysis)", [None] + num_cols)
+    revenue_var = st.selectbox("Select revenue variable (for ROI analysis)", [None] + num_cols)
+    frequency_var = st.selectbox("Select frequency variable (for frequency cap analysis)", [None] + num_cols)
+
+    st.session_state.insights_df = show_data_insights(
+        df=st.session_state.outliers_treated_df,
+        target_var=st.session_state.get("target_var"),
+        time_base=st.session_state.get("time_base"),
+        spend_var=spend_var,
+        reach_var=reach_var,
+        revenue_var=revenue_var,
+        frequency_var=frequency_var
+    )
+
+    if st.button("⬅️ Back to Visualizations"):
         st.session_state.current_step -= 1
         st.rerun()
+    if st.button("➡️ Proceed to Modeling"):
+        st.session_state.current_step = 6
+        st.rerun()
+
+elif st.session_state.current_step == 6:
+    st.header("📈 Run Marketing Mix Model")
+
+    if st.session_state.insights_df is not None:
+        st.subheader("Configure Modeling Parameters")
+
+        if 'rscript_path' not in st.session_state:
+            st.session_state.rscript_path = r"C:\Program Files\R\R-4.4.2\bin\Rscript.exe"
+        if 'robyn_script_path' not in st.session_state:
+            st.session_state.robyn_script_path = r"C:\Users\MM3815\Downloads\data_cleaning_app\run_robyn.R"
+
+        if not os.path.exists(st.session_state.rscript_path):
+            st.error(f"Rscript not found at: {st.session_state.rscript_path}")
+            st.stop()
+        if not os.path.exists(st.session_state.robyn_script_path):
+            st.error(f"Robyn script not found at: {st.session_state.robyn_script_path}")
+            st.stop()
+
+        with st.expander("Advanced Configuration"):
+            st.session_state.rscript_path = st.text_input(
+                "Rscript Path", value=st.session_state.rscript_path, help="Path to Rscript executable"
+            )
+            st.session_state.robyn_script_path = st.text_input(
+                "Robyn Script Path", value=st.session_state.robyn_script_path, help="Path to run_robyn.R script"
+            )
+
+        all_vars = st.session_state.insights_df.select_dtypes(include=[np.number]).columns.tolist()
+        date_var = "Date" if "Date" in st.session_state.insights_df.columns else None
+        target_var = st.session_state.get("target_var", "Conversions")
+        media_vars_options = [v for v in all_vars if v != target_var and v != date_var]
+
+        col1, col2 = st.columns(2)
+        with col1:
+            media_vars = st.multiselect(
+                "Media Variables (spend/impressions)",
+                media_vars_options,
+                default=media_vars_options[:min(5, len(media_vars_options))],
+                help="Select variables representing media spend or impressions"
+            )
+            adstock = st.selectbox(
+                "Adstock Transformation",
+                ["geometric", "weibull"],
+                index=0,
+                help="Choose adstock decay type for media effects"
+            )
+            iterations = st.number_input("Number of Iterations", min_value=100, max_value=2000, value=500, step=100)
+            trials = st.number_input("Number of Trials", min_value=1, max_value=5, value=2, step=1)
+        with col2:
+            control_vars = st.multiselect(
+                "Control Variables (optional)",
+                [v for v in all_vars if v not in media_vars and v != target_var and v != date_var],
+                help="Select variables to control for external factors"
+            )
+
+        n_rows = len(st.session_state.insights_df)
+        n_ind_vars = len(media_vars) + len(control_vars)
+        recommended_rows = n_ind_vars * 10
+
+        st.write(
+            f"Dataset: {n_rows} rows, {n_ind_vars} independent variables (Media: {len(media_vars)}, Control: {len(control_vars)})"
+        )
+
+        if n_ind_vars > 0 and n_rows < recommended_rows:
+            st.error(
+                f"❌ Insufficient data: {n_rows} rows with {n_ind_vars} independent variables. "
+                f"Robyn requires at least {recommended_rows} rows (10:1 ratio)."
+            )
+            max_vars = n_rows // 10
+            if max_vars == 0:
+                st.error("Dataset is too small to model with any variables.")
+                st.button("📂 Re-upload Data", on_click=lambda: st.session_state.update(current_step=1))
+                st.stop()
+            reduce_vars = st.checkbox(f"Reduce to {max_vars} variables", value=True)
+            if reduce_vars:
+                st.info(f"Limiting to {max_vars} variables.")
+                total_vars = media_vars + control_vars
+                total_vars = total_vars[:max_vars]
+                media_vars = [v for v in total_vars if v in media_vars]
+                control_vars = [v for v in total_vars if v in control_vars]
+                st.write("Selected variables:", media_vars + control_vars)
+            else:
+                st.button("📂 Re-upload Data", on_click=lambda: st.session_state.update(current_step=1))
+                st.stop()
+
+        st.markdown("**System Requirements:**\n- Expected runtime: 5–15 minutes")
+
+        if not media_vars:
+            st.warning("Please select at least one media variable.")
+        elif st.button("🚀 Run Robyn Model"):
+            with st.spinner("Running MMM modeling (may take 5–15 minutes)..."):
+                try:
+                    output_dir = "robyn_output"
+                    os.makedirs(output_dir, exist_ok=True)
+                    cleaned_df = clean_column_names(st.session_state.insights_df.copy())
+                    old_to_new_names = dict(zip(st.session_state.insights_df.columns, cleaned_df.columns))
+                    target_var = old_to_new_names.get(target_var, target_var)
+                    media_vars = [old_to_new_names.get(var, var) for var in media_vars]
+                    control_vars = [old_to_new_names.get(var, var) for var in control_vars]
+                    date_var = old_to_new_names.get(date_var, date_var) if date_var else None
+
+                    config = {
+                        "data_path": "",
+                        "dep_var": target_var,
+                        "media_vars": ",".join(media_vars),
+                        "control_vars": ",".join(control_vars) if control_vars else "none",
+                        "date_var": date_var if date_var else "none",
+                        "adstock_type": adstock,
+                        "iterations": str(int(iterations)),
+                        "trials": str(int(trials)),
+                        "User": st.session_state.get("username", "Unknown"),
+                        "Project_Name": st.session_state.get("project_name", "Unknown")
+                    }
+
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_file:
+                        cleaned_df.to_csv(tmp_file.name, index=False)
+                        data_path = tmp_file.name
+                        config["data_path"] = data_path
+
+                    # # Save JSON
+                    # config_path = os.path.join(output_dir, "config.json")
+                    # with open(config_path, "w") as f:
+                    #     json.dump(config, f)
+
+                    all_experiments_path = os.path.join(output_dir, "all_experiments.json")
+                    if os.path.exists(all_experiments_path):
+                        with open(all_experiments_path, "r") as f:
+                            experiments = json.load(f)
+                    else:
+                        experiments = {}
+
+                    # exp_numbers = [int(k.split("_")[1]) for k in experiments.keys() if k.startswith("experiment_")]
+                    # next_exp_num = max(exp_numbers) + 1 if exp_numbers else 1
+                    # exp_key = f"{next_exp_num}"
+                    # # exp_k = f"{next_exp_num}"
+                    # config["ID"] = exp_key
+                    exp_numbers = [int(k) for k in experiments.keys() if k.isdigit()]
+                    next_exp_num = max(exp_numbers) + 1 if exp_numbers else 1
+                    exp_key = str(next_exp_num)
+                    config["ID"] = exp_key
+
+                    exp = {
+                        "User": st.session_state.get("username", "Unknown"),
+                        "Project_Name": st.session_state.get("project_name", "Unknown"),
+                        "Timestamp": datetime.now().isoformat(),
+                        "Spend_variables": ",".join(media_vars),
+                        "Control_variables": ",".join(control_vars) if control_vars else "none",
+                        "Adstock": adstock,
+                        "Iterations": str(int(iterations)),
+                        "Trials": str(int(trials))
+
+                    }
+
+                    experiments[exp_key] = exp
+                    with open(all_experiments_path, "w") as f:
+                        json.dump(experiments, f, indent=4)
+                    # experiments[exp_key] = config
+                    # with open(config_path, "w") as f:
+                    #     json.dump(experiments, f, indent=4)
+                    config_path = os.path.join(output_dir, "config.json")
+                    with open(config_path, "w") as f:
+                        json.dump(config, f)
+
+
+                    result = subprocess.run(
+                        ["Rscript", st.session_state.robyn_script_path],
+                        capture_output=True, text=True
+                    )
+
+                    # st.subheader("Data Preview and Correlations")
+                    # st.write("Summary Statistics:", cleaned_df[media_vars + [target_var]].describe())
+                    # st.write("Correlations with Target:", cleaned_df[media_vars + [target_var]].corr()[target_var])
+
+                    plot_path = os.path.join(output_dir, "plots")
+
+                    best_model_path = os.path.join(output_dir, "Best_Models")
+
+                    if result.returncode == 0:
+                        st.success("🎉 Modeling completed successfully!")
+                        st.session_state.modeling_done = True  # ✅ Set this flag
+
+                        # Continue with your logic: load metrics, show plots etc.
+                            # worked code for pickel
+                        # metrics_path = os.path.join(output_dir, "model_metrics.json")
+                        # model_info_path = os.path.join(output_dir, "RobynModel-models.json")
+                        # pickle_path = os.path.join(output_dir, "best_model_enhanced.pkl")
+                        #
+                        # # Load JSON files
+                        # with open(metrics_path, "r") as f:
+                        #     metrics = json.load(f)
+                        #
+                        # with open(model_info_path, "r") as f:
+                        #     full_model = json.load(f)
+                        #
+                        # # Extract enriched details
+                        # input_collect = full_model.get("InputCollect", {})
+                        # model_collect = full_model.get("ModelsCollect", {})
+                        #
+                        # enhanced_model_info = {
+                        #     "Model_ID": metrics.get("Model_ID"),
+                        #     "NRMSE": metrics.get("NRMSE"),
+                        #     "Adjusted_R2": metrics.get("Adjusted_R2"),
+                        #     "Dependent_Variable": input_collect.get("dep_var", [""])[0],
+                        #     "Adstock_Type": input_collect.get("adstock", [""])[0],
+                        #     "Paid_Media_Variables": input_collect.get("paid_media_vars", []),
+                        #     "Control_Variables": input_collect.get("context_vars", []),
+                        #     "Date_Variable": input_collect.get("date_var", [""])[0],
+                        #     "Prophet_Variables": input_collect.get("prophet_vars", []),
+                        #     "Country": input_collect.get("prophet_country", [""])[0],
+                        #     "Iterations": model_collect.get("iterations", [None])[0],
+                        #     "Trials": model_collect.get("trials", [None])[0],
+                        #     "Total_Observations": input_collect.get("totalObservations", [None])[0],
+                        #     "Train_Window_Start": input_collect.get("window_start", [""])[0],
+                        #     "Train_Window_End": input_collect.get("window_end", [""])[0],
+                        #     "Robyn_Version": input_collect.get("version", [""])[0],
+                        #     "Training_Timestamp": model_collect.get("train_timestamp", [""])[0]
+                        # }
+                        #
+                        # # Save as Pickle
+                        # with open(pickle_path, "wb") as f:
+                        #     pickle.dump(enhanced_model_info, f)
+                        #
+                        # print(f"✅ Enhanced model metadata saved to: {pickle_path}")
+                                        # worked ends
+
+
+
+                        # Replace with your actual path
+                        # result = pyreadr.read_r(r"C:\Users\MM3815\Downloads\data_cleaning_app\robyn_output\all_models.rds")
+
+                        # This returns a dictionary-like object
+                        # Usually, the key will be the name of the saved R object
+                        # ------------------------------------------------------------------
+                        # output_models = list(result.values())[0]
+                        # with open(r'C:\Users\MM3815\Downloads\data_cleaning_app\robyn_output\best_model_enhanced.pkl', 'wb') as f:
+                        #     pickle.dump(output_models, f)
+                        # Extract the data.frame or list
+
+                        # Locate latest updated folder in plot_path
+                        # if os.path.exists(plot_path):
+                        #     subdirs == [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
+                        #                os.path.isdir(os.path.join(plot_path, d))]
+                        #     if subdirs:
+                        #         latest_plot_folder = max(subdirs, key=os.path.getmtime)
+                        #         st.subheader("Model Visualizations")
+                        #         plot_files = sorted([f for f in os.listdir(latest_plot_folder) if f.endswith(".png")])
+                        #         for plot_file in plot_files:
+                        #             st.write(f"**{plot_file}**")
+                        #             st.image(os.path.join(latest_plot_folder, plot_file))
+                        if os.path.exists(best_model_path):
+                            png_files = [os.path.join(best_model_path, f) for f in os.listdir(best_model_path) if
+                                         f.endswith(".png")]
+                            if png_files:
+                                latest_best_model_img = max(png_files, key=os.path.getmtime)
+                                st.subheader("🏆 Best Model")
+                                st.image(latest_best_model_img)
+                        if os.path.exists(plot_path):
+                            subdirs = [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
+                                       os.path.isdir(os.path.join(plot_path, d))]
+                            if subdirs:
+                                latest_plot_folder = max(subdirs, key=os.path.getmtime)
+                                st.info("📊 Download all the model output")
+
+                                # 🔽 Create a ZIP archive of the folder in memory
+                                zip_buffer = io.BytesIO()
+                                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                    for root, _, files in os.walk(latest_plot_folder):
+                                        for file in files:
+                                            file_path = os.path.join(root, file)
+                                            arcname = os.path.relpath(file_path,
+                                                                      latest_plot_folder)  # Store relative path
+                                            zip_file.write(file_path, arcname)
+
+                                zip_buffer.seek(0)  # Move to start of the buffer
+
+                                # 💾 Provide download button
+                                st.download_button(
+                                    label="📥 Download Model Plots (ZIP)",
+                                    data=zip_buffer,
+                                    file_name="model_plots.zip",
+                                    mime="application/zip"
+                                )
+                                # input for budget optimization
+                                # 📌 Input box to capture the best model ID
+                    #     best_model_id = st.text_input("Enter the Best Model ID to Save:",
+                    #                                   placeholder="e.g., 4_190_9")
+                    #
+                    #     # 📌 Input box to capture the best model ID
+                    #     best_model_id = st.text_input("Enter the Best Model ID to Save:", placeholder="e.g., 4_190_9")
+                    #
+                    #     if best_model_id:
+                    #         st.session_state.best_model_id = best_model_id  # ✅ Save input to session
+                    #         model_json_path = os.path.join(output_dir, "model.json")
+                    #         model_data = {"selected_model_id": best_model_id}
+                    #
+                    #         try:
+                    #             with open(model_json_path, "w") as f:
+                    #                 json.dump(model_data, f, indent=4)
+                    #             st.success(f"✅ Saved selected model ID to {model_json_path}")
+                    #             st.session_state.model_id_saved = True  # ✅ Trigger budget button display
+                    #
+                    #         except Exception as e:
+                    #             st.error(f"❌ Failed to save model ID: {e}")
+                    #
+                    # # ✅ Show budget optimization button if model ID saved
+                    # if st.session_state.get("model_id_saved"):
+                    #     if st.button("🚀 Run Budget Optimization"):
+                    #         try:
+                    #             results = subprocess.run(
+                    #                 ["Rscript", r"C:/Users/MM3815/Documents/MMM_Auto/BOtwo.R"],
+                    #                 capture_output=True,
+                    #                 text=True
+                    #             )
+                    #             if results.returncode == 0:
+                    #                 st.success("✅ Budget optimization completed successfully.")
+                    #                 st.text_area("R Output", results.stdout, height=300)
+                    #             else:
+                    #                 st.error("❌ Budget optimization failed.")
+                    #                 st.text_area("R Error Output", results.stderr, height=300)
+                    #         except Exception as e:
+                    #             st.error(f"❌ Failed to run R script: {e}")
+
+                        # Show model summary
+                    else:
+
+                        st.error("❌ Modeling failed.")
+
+                        # Display actual stderr output from R
+
+                        if result.stderr:
+                            st.code(result.stderr, language='bash')  # Styled error output
+
+                        # Add common error-specific messages
+
+                        if "not converged" in result.stderr.lower():
+
+                            st.warning("⚠️ Model did not converge. Try increasing iterations or adjusting variables.")
+
+                        elif "coefficient = 0" in result.stderr.lower():
+
+                            st.warning("⚠️ Zero coefficients detected. Some predictors might be weak or irrelevant.")
+
+                        elif "argument is of length zero" in result.stderr.lower():
+
+                            st.warning("⚠️ Generic error encountered. Check `robyn_log.txt` for more insights.")
+
+
+                except Exception as e:
+                    st.error(f"Unexpected error: {str(e)}")
+                finally:
+                    if os.path.exists(data_path):
+                        os.unlink(data_path)
+
+        output_dir = "robyn_output"
+        os.makedirs(output_dir, exist_ok=True)
+        budget_opt_dir = os.path.join(output_dir, "budget_optimization")
+
+        # 📌 Input box to capture the best model ID
+        best_model_id = st.text_input(
+            "Enter the Best Model ID to Save:",
+            placeholder="e.g., 4_190_9",
+            key="best_model_input"
+        )
+
+        # Step 1: Budget Allocation Type
+        option = st.radio("Choose your budget type:", ["Open Allocation", "Fixed Budget"])
+        allocation_type = option
+        fixed_budget = None
+
+        if option == "Open Allocation":
+            st.success("Proceeding with Open Allocation...")
+
+        elif option == "Fixed Budget":
+            fixed_budget = st.number_input("Enter your fixed budget value:", min_value=0.0, step=100.0)
+            st.success(f"Fixed budget selected: {fixed_budget}")
+
+        # Step 2: Optional - Customized Constraints Budget
+        # constraints = None
+        # with st.expander("➕ Optional: Customized Constraints Budget"):
+        #     lower = st.number_input("Enter lower constraint:", min_value=0.0, step=0.5, key="lower")
+        #     upper = st.number_input("Enter upper constraint:", min_value=0.0, step=0.5, key="upper")
+        #     if lower > upper:
+        #         st.error("Lower constraint cannot be greater than upper constraint!")
+        #     else:
+        #         if lower > 0.0 or upper > 0.0:
+        #             constraints = {"lower": lower, "upper": upper}
+        #             st.info(f"Constraint Range: {lower} to {upper}")
+        #         else:
+        #             constraints = None  # Explicitly set to None if both are 0
+        constraints = {}
+        with st.expander("➕ Optional: Customized Constraints Budget"):
+            st.write("Set lower and upper constraints for each media variable:")
+
+            for var in media_vars:  # Assuming media_variables is your list of channel/variable names
+                col1, col2 = st.columns(2)
+                with col1:
+                    lower = st.number_input(
+                        f"Lower bound for {var}:", min_value=0.0, step=0.1, value=0.7, key=f"lower_{var}"
+                    )
+                with col2:
+                    upper = st.number_input(
+                        f"Upper bound for {var}:", min_value=0.0, step=0.1, value=1.5, key=f"upper_{var}"
+                    )
+
+                if lower > upper:
+                    st.error(f"❌ Lower bound cannot be greater than upper for {var}")
+                elif lower > 0.0 or upper > 0.0:
+                    constraints[var] = {"lower": lower, "upper": upper}
+                    st.success(f"✅ {var} → Constraint Range: {lower} to {upper}")
+
+        # If no constraints were added, set to None
+        if not constraints:
+            constraints = None
+
+        # Step 3: Optional - Time-based Budget
+        time_range_options = ["last_5", "last_10", "last_15", "last_20"]
+        selected_value = st.selectbox("Please select the range (optional)", ["None"] + time_range_options)
+
+        # Set time_range to None if "None" is selected
+        time_range = None if selected_value == "None" else selected_value
+
+        # Step 4: Save Model Info to JSON
+        if best_model_id:
+            st.session_state.best_model_id = best_model_id
+            model_json_path = os.path.join(output_dir, "model.json")
+
+            model_data = {
+                "model_id": best_model_id,
+                "allocation_type": allocation_type,
+                "fixed_budget": fixed_budget if allocation_type == "Fixed Budget" else None,
+                "constraints": constraints,
+                "time_range": time_range
+            }
+
+        # Step 4: Save Model Info to JSON
+        if best_model_id:
+            st.session_state.best_model_id = best_model_id
+            model_json_path = os.path.join(output_dir, "model.json")
+
+            model_data = {
+                "model_id": best_model_id,
+                "allocation_type": allocation_type,
+                "fixed_budget": fixed_budget if allocation_type == "Fixed Budget" else None,
+                "constraints": constraints,
+                "time_range": time_range
+            }
+
+            try:
+                with open(model_json_path, "w") as f:
+                    json.dump(model_data, f, indent=4)
+                st.success(f"✅ Saved selected model info to {model_json_path}")
+                st.session_state.model_id_saved = True
+            except Exception as e:
+                st.error(f"❌ Failed to save model info: {e}")
+
+        # ✅ Show budget optimization button if model ID saved
+    if st.session_state.get("model_id_saved"):
+        if st.button("🚀 Run Budget Optimization"):
+            try:
+                results = subprocess.run(
+                    ["Rscript", r"C:/Users/MM3815/Documents/MMM_Auto/BOtwo.R"],
+                    capture_output=True,
+                    text=True
+                )
+                if results.returncode == 0:
+                    st.success("✅ Budget optimization completed successfully.")
+
+                    # Get all subfolders in the budget optimization directory
+                    folders = [os.path.join(budget_opt_dir, f) for f in os.listdir(budget_opt_dir) if
+                               os.path.isdir(os.path.join(budget_opt_dir, f))]
+
+                    if not folders:
+                        st.warning("⚠️ No folders found in budget optimization directory.")
+                    else:
+                        # Find the most recently modified folder
+                        latest_folder = max(folders, key=os.path.getmtime)
+
+                        st.write("### Displaying budget optimization plots ")
+
+                        # Find all PNG files in the latest folder
+                        png_files = sorted(glob.glob(os.path.join(latest_folder, "*.png")))
+
+                        if not png_files:
+                            st.warning("⚠️ No PNG files found in the latest budget optimization folder.")
+                        else:
+                            for img_path in png_files:
+                                st.image(img_path, use_column_width=True)
+                else:
+                    st.error("❌ Budget optimization failed.")
+                    st.text_area("R Error Output", results.stderr, height=300)
+            except Exception as e:
+                st.error(f"❌ Failed to run R script: {e}")
+
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("⬅️ Back to Data Insights"):
+                st.session_state.current_step -= 1
+                st.rerun()
+        with col2:
+            if st.button("🔄 Restart Modeling"):
+                st.session_state.current_step = 6
+                st.rerun()
+        with col3:
+            if st.button("📜 History"):
+                st.session_state.current_step = 7
+                st.rerun()
+
+
+# elif st.session_state.current_step == 7:
+#     st.header("📜 Modeling History")
+#
+#     output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+#     history_path = os.path.join(output_dir, "all_experiments.json")
+#
+#     if os.path.exists(history_path):
+#         with open(history_path, "r", encoding="utf-8") as f:
+#             experiments = json.load(f)
+#
+#         if experiments:
+#             df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
+#             df_history.rename(columns={"index": "Experiment"}, inplace=True)
+#             st.dataframe(df_history)
+#         else:
+#             st.info("No experiments found in history.")
+
+elif st.session_state.current_step == 7:
+    st.header("📜 Modeling History")
+
+    output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+    history_path = os.path.join(output_dir, "all_experiments.json")
+    plot_path = os.path.join(output_dir, "plots")
+
+    if os.path.exists(history_path):
+        with open(history_path, "r", encoding="utf-8") as f:
+            experiments = json.load(f)
+
+        if experiments:
+            df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
+
+            desired_order = [
+                "index", "User", "Project_Name", "Timestamp", "Spend_variables",
+                "Control_variables", "Adstock", "Iterations", "Trials"
+            ]
+            df_history = df_history[desired_order]
+
+            st.dataframe(df_history, use_container_width=True)
+
+            # 🔽 Select and download experiment by folder name
+            st.subheader("📁 Select Experiment ID to Download")
+
+            # Build folder prefix list and check for matches in plots
+            experiment_options = {}
+            for i, row in df_history.iterrows():
+                user = row['User']
+                project = row['Project_Name']
+                exp_id = row['index']
+                folder_prefix = f"{user}~{project}~{exp_id}"
+
+                matching_folders = glob.glob(os.path.join(plot_path, f"{folder_prefix}*"))
+                if matching_folders:
+                    experiment_options[exp_id] = matching_folders[0]  # Use experiment ID as dropdown label
+
+            if experiment_options:
+                selected_exp = st.selectbox("Select an Experiment ID", options=list(experiment_options.keys()))
+                if selected_exp:
+                    zip_buffer = create_zip_buffer(experiment_options[selected_exp])
+                    st.download_button(
+                        label=f"📥 Download {selected_exp}.zip",
+                        data=zip_buffer,
+                        file_name=f"{selected_exp}.zip",
+                        mime="application/zip"
+                    )
+            else:
+                st.info("No matching experiment folders found in the 'plots' directory.")
+        else:
+            st.info("No experiments found in history.")
+    else:
+        st.warning("History file (all_experiments.json) not found.")
+
+    # Navigation Buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("⬅️ Back to Modeling"):
+            st.session_state.current_step = 6
+            st.rerun()
+    with col2:
+        if st.button("🏠 Back to Home"):
+            st.session_state.current_step = 1
+            st.rerun()
+
+# elif st.session_state.current_step == 7:
+#     st.header("📜 Modeling History")
+#
+#     output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
+#     history_path = os.path.join(output_dir, "all_experiments.json")
+#
+#     if os.path.exists(history_path):
+#         with open(history_path, "r", encoding="utf-8") as f:
+#             experiments = json.load(f)
+#
+#         if experiments:
+#             df_history = pd.DataFrame.from_dict(experiments, orient="index").reset_index()
+#
+#             desired_order = [
+#                 "index", "User", "Project_Name", "Timestamp", "Spend_variables",
+#                 "Control_variables", "Adstock", "Iterations", "Trials"
+#             ]
+#             df_history = df_history[desired_order]
+#             plot_path = os.path.join(output_dir, "plots")
+#
+#             st.markdown("### 🔍 Experiment List")
+#
+#             for i, row in df_history.iterrows():
+#                 user = row['User']
+#                 project = row['Project_Name']
+#                 exp_id = row['index']
+#                 folder_prefix = f"{user}~{project}~{exp_id}"
+#                 matching_folders = glob.glob(os.path.join(plot_path, f"{folder_prefix}*"))
+#
+#                 with st.expander(f"📁 Project: {project} | User: {user} | ID: {exp_id}"):
+#                     st.write(f"🕒 Timestamp: `{row['Timestamp']}`")
+#                     st.write(f"💰 Spend Variables: `{row['Spend_variables']}`")
+#                     st.write(f"🎛 Control Variables: `{row['Control_variables']}`")
+#                     st.write(f"🔄 Adstock: `{row['Adstock']}` | 🧪 Iterations: `{row['Iterations']}` | 🎲 Trials: `{row['Trials']}`")
+#
+#                     if matching_folders:
+#                         folder_path = matching_folders[0]
+#                         zip_buffer = create_zip_buffer(folder_path)
+#                         st.download_button(
+#                             label="📥 Download Model Output",
+#                             data=zip_buffer,
+#                             file_name=f"{folder_prefix}.zip",
+#                             mime="application/zip",
+#                             key=f"download_zip_{i}"
+#                         )
+#                     else:
+#                         st.error("❌ No folder found for this experiment.")
+#
+#         else:
+#             st.info("No experiments found in history.")
+#     else:
+#         st.warning("History file (all_experiments.json) not found.")
+#
+#     # Navigation
+#     col1, col2 = st.columns(2)
+#     with col1:
+#         if st.button("⬅️ Back to Modeling"):
+#             st.session_state.current_step = 6
+#             st.rerun()
+#     with col2:
+#         if st.button("🏠 Back to Home"):
+#             st.session_state.current_step = 1
+#             st.rerun()
