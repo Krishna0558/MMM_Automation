@@ -9,7 +9,7 @@ required_packages <- c("Robyn", "dplyr", "jsonlite", "ggplot2", "doSNOW", "retic
 
 missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
 if (length(missing_packages) > 0) {
-  stop("Error: The following required packages are missing: ", paste(missing_packages, collapse = ", "),
+  stop("Error: The following required packages are missing: ", paste(missing_packages, collapse = ", "), 
        "\nPlease install them manually in R with:\n",
        "install.packages(c('", paste(missing_packages, collapse = "', '"), "'), dependencies = TRUE, lib = '", personal_lib, "')")
 }
@@ -22,7 +22,7 @@ message("Robyn version: ", packageVersion("Robyn"))
 
 if (length(args) == 0) {
   config_path <- "C:\\Users\\MM3815\\Downloads\\data_cleaning_app\\robyn_output\\config.json"
-
+  
   if (file.exists(config_path)) {
     message("No command-line arguments provided. Reading from ", config_path)
     config <- jsonlite::fromJSON(config_path)
@@ -145,10 +145,10 @@ message("robyn_run completed")
 #     Param2 = model$param2
 #   )
 # })
-#
+# 
 # # Combine all summaries into one dataframe
 # model_summaries_df <- do.call(rbind, model_summaries)
-#
+# 
 # # Write the summary dataframe to CSV
 # write.csv(model_summaries_df, file = file.path(output_dir, "all_models_summary.csv"), row.names = FALSE)
 
@@ -232,31 +232,31 @@ if (nrow(folder_info) > 0) {
 
 if (!is.null(OutputCollect$allPareto$resultHypParam)) {
   hyp_param <- OutputCollect$allPareto$resultHypParam
-
+  
   nrmse_col <- grep("nrmse", colnames(hyp_param), ignore.case = TRUE, value = TRUE)
   rsq_col <- grep("rsq|r_squared|adj_r2", colnames(hyp_param), ignore.case = TRUE, value = TRUE)
   sol_id_col <- grep("solID|solution_id|model_id", colnames(hyp_param), ignore.case = TRUE, value = TRUE)
-
+  
   if (length(nrmse_col) > 0 && length(rsq_col) > 0 && length(sol_id_col) > 0) {
     # Normalize NRMSE and Adjusted R² for combined ranking
-    nrmse_norm <- (hyp_param[[nrmse_col[1]]] - min(hyp_param[[nrmse_col[1]]])) /
+    nrmse_norm <- (hyp_param[[nrmse_col[1]]] - min(hyp_param[[nrmse_col[1]]])) / 
       (max(hyp_param[[nrmse_col[1]]]) - min(hyp_param[[nrmse_col[1]]]))
-    adj_r2_norm <- (hyp_param[[rsq_col[1]]] - min(hyp_param[[rsq_col[1]]])) /
+    adj_r2_norm <- (hyp_param[[rsq_col[1]]] - min(hyp_param[[rsq_col[1]]])) / 
       (max(hyp_param[[rsq_col[1]]]) - min(hyp_param[[rsq_col[1]]]))
-
+    
     # Combine metrics: minimize NRMSE (lower is better) and maximize Adj R² (higher is better)
     combined_score <- nrmse_norm - adj_r2_norm
     best_model_idx <- which.min(combined_score)
-
+    
     # Extract metrics for the best model
     model_id <- hyp_param[best_model_idx, sol_id_col[1]][[1]]
     nrmse <- hyp_param[best_model_idx, nrmse_col[1]][[1]]
     adj_r2 <- hyp_param[best_model_idx, rsq_col[1]][[1]]
     best_model_metrics <- hyp_param[best_model_idx, c(sol_id_col[1], nrmse_col[1], rsq_col[1], "robynPareto")]
-
+    
     message("Selected best model ID: ", model_id)
     message("Best model metrics: ", paste(capture.output(print(best_model_metrics)), collapse = "; "))
-
+    
     # Save initial model metrics to JSON
     model_metrics <- list(
       Model_ID = model_id,
@@ -270,7 +270,7 @@ if (!is.null(OutputCollect$allPareto$resultHypParam)) {
     }, error = function(e) {
       message("Failed to write initial model_metrics.json: ", e$message)
     })
-
+    
     # Check if allSolutions exists and contains model_id
     if (!is.null(OutputCollect$allSolutions) && length(OutputCollect$allSolutions) > 0) {
       message("Available solution IDs in OutputCollect$allSolutions: ", paste(OutputCollect$allSolutions, collapse = ", "))
@@ -278,22 +278,22 @@ if (!is.null(OutputCollect$allPareto$resultHypParam)) {
       valid_hyp_param <- hyp_param[hyp_param[[sol_id_col[1]]] %in% OutputCollect$allSolutions, ]
       if (nrow(valid_hyp_param) > 0) {
         # Recompute best model among valid solutions
-        nrmse_norm_valid <- (valid_hyp_param[[nrmse_col[1]]] - min(valid_hyp_param[[nrmse_col[1]]])) /
+        nrmse_norm_valid <- (valid_hyp_param[[nrmse_col[1]]] - min(valid_hyp_param[[nrmse_col[1]]])) / 
           (max(valid_hyp_param[[nrmse_col[1]]]) - min(valid_hyp_param[[nrmse_col[1]]]))
-        adj_r2_norm_valid <- (valid_hyp_param[[rsq_col[1]]] - min(valid_hyp_param[[rsq_col[1]]])) /
+        adj_r2_norm_valid <- (valid_hyp_param[[rsq_col[1]]] - min(valid_hyp_param[[rsq_col[1]]])) / 
           (max(valid_hyp_param[[rsq_col[1]]]) - min(valid_hyp_param[[rsq_col[1]]]))
         combined_score_valid <- nrmse_norm_valid - adj_r2_norm_valid
         best_valid_idx <- which.min(combined_score_valid)
-
+        
         # Update model_id and metrics for valid model
         model_id <- valid_hyp_param[best_valid_idx, sol_id_col[1]][[1]]
         nrmse <- valid_hyp_param[best_valid_idx, nrmse_col[1]][[1]]
         adj_r2 <- valid_hyp_param[best_valid_idx, rsq_col[1]][[1]]
         best_model_metrics <- valid_hyp_param[best_valid_idx, c(sol_id_col[1], nrmse_col[1], rsq_col[1], "robynPareto")]
-
+        
         message("Updated best model ID (valid in allSolutions): ", model_id)
         message("Updated best model metrics: ", paste(capture.output(print(best_model_metrics)), collapse = "; "))
-
+        
         # Update JSON with valid model metrics
         model_metrics <- list(
           Model_ID = model_id,
@@ -306,23 +306,23 @@ if (!is.null(OutputCollect$allPareto$resultHypParam)) {
         }, error = function(e) {
           message("Failed to update model_metrics.json: ", e$message)
         })
-
+        
         # Create Best_Models folder
         # Create Best_Models folder if it doesn't exist
         # Define paths
         best_models_dir <- file.path(output_dir, "Best_Models")
-
+        
         # Ensure Best_Models folder exists
         if (!dir.exists(best_models_dir)) {
           dir.create(best_models_dir, recursive = TRUE)
         }
-
+        
         # Timestamp for unique filename
         timestamp <- format(Sys.time(), "%Y-%m-%d_%H-%M-%S")
-
+        
         # Generate one-pager plot
         message("Generating one-pager plot for best model ID: ", model_id)
-
+        
         tryCatch({
           # Run robyn_onepagers
           Robyn::robyn_onepagers(
@@ -332,16 +332,16 @@ if (!is.null(OutputCollect$allPareto$resultHypParam)) {
             plot_folder = best_models_dir,
             quiet = TRUE
           )
-
+          
           Sys.sleep(1)  # Small delay to ensure file saves
-
+          
           # 💥 Scan output_dir for any misplaced plot matching 'Best_Models*.png'
           misplaced_png_files <- list.files(
             path = output_dir,
             pattern = paste0("^Best_Models.*", model_id, ".*\\.png$"),
             full.names = TRUE
           )
-
+          
           if (length(misplaced_png_files) > 0) {
             for (file in misplaced_png_files) {
               # Build new name with timestamp
@@ -353,14 +353,14 @@ if (!is.null(OutputCollect$allPareto$resultHypParam)) {
           } else {
             message("⚠️ No misplaced PNG file found for model ID: ", model_id)
           }
-
+          
           # Optional: Do same for PDF if needed
           misplaced_pdf_files <- list.files(
             path = output_dir,
             pattern = paste0("^Best_Models.*", model_id, ".*\\.pdf$"),
             full.names = TRUE
           )
-
+          
           if (length(misplaced_pdf_files) > 0) {
             for (file in misplaced_pdf_files) {
               new_file_name <- paste0(model_id, "_", timestamp, "_onepager.pdf")
@@ -372,11 +372,11 @@ if (!is.null(OutputCollect$allPareto$resultHypParam)) {
         }, error = function(e) {
           message("❌ Failed to generate or save one-pager: ", e$message)
         })
-
-
-
-
-
+        
+        
+        
+        
+        
       } else {
         message("Error: No models in resultHypParam match OutputCollect$allSolutions")
         message("Available solution IDs: ", paste(OutputCollect$allSolutions, collapse = ", "))
@@ -406,26 +406,26 @@ saveRDS(OutputCollect, file = file.path(output_dir, "OutputCollect.rds"))
 # )
 if (!is.null(OutputCollect$allSolutions) && length(OutputCollect$allSolutions) > 0) {
   message("✅ allSolutions length: ", length(OutputCollect$allSolutions))
-
+  
   if (!is.null(OutputCollect$allPareto$resultHypParam)) {
     hyp_param <- OutputCollect$allPareto$resultHypParam
     sol_id_col <- grep("solID|solution_id|model_id", colnames(hyp_param), ignore.case = TRUE, value = TRUE)
-
+    
     if (length(sol_id_col) == 0) stop("🚨 No solution ID column found.")
     if (!"robynPareto" %in% colnames(hyp_param)) stop("🚨 robynPareto column missing.")
-
+    
     pareto_solutions <- hyp_param[hyp_param$robynPareto == 1, , drop = FALSE]
     if (nrow(pareto_solutions) == 0) stop("🚨 No Pareto front solutions found.")
-
+    
     exclude_cols <- c(
       sol_id_col, "robynPareto", "cluster",
-      grep("_alphas|_gammas|_thetas|_shapes|_scales|train_size|lambda|pos|Elapsed|iterNG|iterPar|iterations|coef0|trial",
+      grep("_alphas|_gammas|_thetas|_shapes|_scales|train_size|lambda|pos|Elapsed|iterNG|iterPar|iterations|coef0|trial", 
            colnames(hyp_param), value = TRUE)
     )
     metric_cols <- names(pareto_solutions)[
       sapply(pareto_solutions, is.numeric) & !names(pareto_solutions) %in% exclude_cols
     ]
-
+    
     if (length(metric_cols) == 0) {
       model_metrics_df <- data.frame(Model_ID = pareto_solutions[[sol_id_col[1]]])
     } else {
@@ -435,12 +435,12 @@ if (!is.null(OutputCollect$allSolutions) && length(OutputCollect$allSolutions) >
         model_metrics_df <- model_metrics_df[order(model_metrics_df$nrmse), ]
       }
     }
-
+    
     # Save Pareto front metrics to CSV (preserve NAs)
     solutions_csv <- file.path(output_dir, "model_solutions.csv")
     write.csv(model_metrics_df, solutions_csv, row.names = FALSE, na = "")
     message("✅ Saved Pareto front model solutions to ", solutions_csv)
-
+    
     # Save summary
     summary_txt <- file.path(output_dir, "summary.txt")
     sink(summary_txt)
@@ -448,21 +448,21 @@ if (!is.null(OutputCollect$allSolutions) && length(OutputCollect$allSolutions) >
     print(model_metrics_df)
     sink()
     message("✅ Saved summary to ", summary_txt)
-
+    
     # Save plots
     plot_dir <- file.path(output_dir, "plots")
     dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
-
+    
     # png(file.path(plot_dir, "decomposition.png"), width = 1000, height = 800)
     # print(OutputCollect$plots$patches$plots[[1]])
     # dev.off()
-    #
+    # 
     # png(file.path(plot_dir, "response_curves.png"), width = 1000, height = 800)
     # print(OutputCollect$plots$response_plots)
     # dev.off()
-
+    
     message("✅ Saved model decomposition and response curve plots")
-
+    
   } else {
     stop("🚨 resultHypParam is NULL or unavailable.")
   }
@@ -473,166 +473,3 @@ if (!is.null(OutputCollect$allSolutions) && length(OutputCollect$allSolutions) >
 message("Modeling completed successfully")
 #quit(status = 0)
 
-
-
-
-R Script - 2
-========================================================
-
-args <- commandArgs(trailingOnly = TRUE)
-
-personal_lib <- "C:/Users/MM3815/Documents/R/library"
-if (!dir.exists(personal_lib)) dir.create(personal_lib, recursive = TRUE)
-.libPaths(personal_lib)
-
-library(Robyn)
-library(jsonlite)
-# required_packages <- c("Robyn", "jsonlite")
-#
-# # Check for missing packages
-# missing_packages <- required_packages[!sapply(required_packages, requireNamespace, quietly = TRUE)]
-# if (length(missing_packages) > 0) {
-#   stop("Error: The following required packages are missing: ", paste(missing_packages, collapse = ", "),
-#        "\nPlease install them manually in R with:\n",
-#        "install.packages(c('", paste(missing_packages, collapse = "', '"), "'), dependencies = TRUE, lib = '", personal_lib, "')")
-# }
-
-# Define paths
-output_dir <- "C:\\Users\\MM3815\\Downloads\\data_cleaning_app\\robyn_output"
-input_rds_path <- file.path(output_dir, "InputCollect.rds")
-output_rds_path <- file.path(output_dir, "OutputCollect.rds")
-json_path <- file.path(output_dir, "model.json")
-
-# Load Robyn objects
-InputCollect <- readRDS(input_rds_path)
-OutputCollect <- readRDS(output_rds_path)
-model_info <- fromJSON(json_path)
-
-# Read selected model ID from JSON
-model_id <- model_info$model_id
-allocation_type <- model_info$allocation_type
-total_budget <- model_info$fixed_budget
-# constraint_lower <- model_info$constraints$lower
-# constraint_upper <- model_info$constraints$upper
-constraints_list <- model_info$constraints
-
-# Convert to named vectors for lower and upper constraints
-channel_constr_low <- sapply(constraints_list, function(x) x$lower)
-channel_constr_up <- sapply(constraints_list, function(x) x$upper)
-
-# Optionally convert to named vectors if you want names retained
-# names(channel_constr_low) <- names(constraints_list)
-# names(channel_constr_up) <- names(constraints_list)
-
-# If needed: convert to un-named numeric vectors
-channel_constr_low <- as.numeric(channel_constr_low)
-channel_constr_up <- as.numeric(channel_constr_up)
-time_range <- model_info$time_range
-message("✅ Selected Model ID: ", model_id)
-
-# Save the selected model object
-selected_model <- OutputCollect$resultHypParam[[model_id]]
-
-# saveRDS(selected_model, file = file.path(output_dir, paste0("SelectedModel_", model_id, ".rds")))
-# option -2
-# full_model <- list(
-#   InputCollect = InputCollect,
-#   OutputCollect = OutputCollect,
-#   selected_model_id = model_id
-# )
-#
-# saveRDS(full_model, file = file.path(output_dir, paste0("RobynModel_", model_id, ".rds")))
-
-# Extract media variables
-media_vars <- InputCollect$paid_media_vars
-if (is.null(media_vars)) stop("🚨 Paid media variables not found in InputCollect.")
-
-# Budget Optimization Section
-message("🔄 Starting budget optimization")
-budget_output_dir <- file.path(output_dir, "budget_optimization")
-dir.create(budget_output_dir, showWarnings = FALSE)
-
-scenarios <- c("max_historical_response", "max_response", "target_efficiency")
-allocator_results <- list()
-
-for (scenario in scenarios) {
-  message("📊 Running budget allocation for scenario: ", scenario)
-  target_value <- if (scenario == "target_efficiency") 1.5 else NULL
-  #
-  # # Handle lower constraints
-  # if (!is.null(constraint_lower)) {
-  #   if (length(constraint_lower) == length(media_vars)) {
-  #     channel_constr_low <- constraint_lower  # Already a vector → use as-is
-  #   } else {
-  #     channel_constr_low <- rep(constraint_lower, length(media_vars))  # Scalar → replicate
-  #   }
-  # } else {
-  #   channel_constr_low <- rep(0, length(media_vars))  # Not provided → use default
-  # }
-  #
-  # # Handle upper constraints
-  # if (!is.null(constraint_upper)) {
-  #   if (length(constraint_upper) == length(media_vars)) {
-  #     channel_constr_up <- constraint_upper
-  #   } else {
-  #     channel_constr_up <- rep(constraint_upper, length(media_vars))
-  #   }
-  # } else {
-  #   channel_constr_up <- rep(10, length(media_vars))
-  # }
-
-  message("mediavaerssssss", media_vars)
-
-  # Assign names
-  names(channel_constr_low) <- media_vars
-  names(channel_constr_up) <- media_vars
-  print("below:")
-  message(channel_constr_low)
-  message(channel_constr_up)
-
-  cat("🔧 Media Variable Constraints:\n")
-  for (i in seq_along(media_vars)) {
-    cat(sprintf("• %s → Lower: %.3f | Upper: %.3f\n",
-                media_vars[i],
-                channel_constr_low[i],
-                channel_constr_up[i]))
-  }
-
-  AllocatorCollect <- Robyn::robyn_allocator(
-    InputCollect = InputCollect,
-    OutputCollect = OutputCollect,
-    select_model = model_id,
-    scenario = scenario,
-    target_value = target_value,
-    channel_constr_low = channel_constr_low,
-    channel_constr_up = channel_constr_up,
-    total_budget = if (!is.null(total_budget)) total_budget else NULL,  # 👈 ADD THIS LINE
-    date_range = if (!is.null(time_range)) time_range else NULL,
-    export = TRUE,
-    plot_folder = budget_output_dir
-  )
-
-
-
-  print("jgdjwlsn")
-  print(target_value)
-
-  allocator_results[[scenario]] <- AllocatorCollect
-
-  if (!is.null(AllocatorCollect$dt_optimisation)) {
-    write.csv(
-      AllocatorCollect$dt_optimisation,
-      file.path(budget_output_dir, paste0("budget_allocation_", scenario, ".csv")),
-      row.names = FALSE
-    )
-  }
-
-  if (!is.null(AllocatorCollect$plot)) {
-    png(file.path(budget_output_dir, paste0("budget_allocation_plot_", scenario, ".png")),
-        width = 1000, height = 800)
-    print(AllocatorCollect$plot)
-    dev.off()
-  }
-}
-
-message("✅ Budget allocation completed for all scenarios.")
