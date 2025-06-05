@@ -17,6 +17,7 @@ from src.Data_Insights import show_data_insights
 import yaml
 
 
+
 def fileconfig(path="config.yaml"):
     with open(path,"r") as f:
         return yaml.safe_load(f)
