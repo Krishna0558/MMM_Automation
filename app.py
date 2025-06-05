@@ -7,6 +7,7 @@ import numpy as np
 import plotly.express as px
 from robyn import Robyn
 from datetime import datetime
+import pyreadr
 import pickle
 import subprocess
 import tempfile
@@ -516,67 +517,19 @@ elif st.session_state.current_step == 6:
                         # print(f"✅ Enhanced model metadata saved to: {pickle_path}")
                                         # worked ends
 
-                        output_dir = os.path.join(os.path.dirname(st.session_state.robyn_script_path), "robyn_output")
-                        plot_path = os.path.join(output_dir, "plots")
-                        pickle_dir = os.path.join(output_dir, "pickles")
 
-                        # Make sure the pickles directory exists
-                        os.makedirs(pickle_dir, exist_ok=True)
 
-                        # Step 1: Find the latest folder in plots directory
-                        experiment_folders = [f for f in glob.glob(os.path.join(plot_path, "*")) if os.path.isdir(f)]
-                        if not experiment_folders:
-                            st.error("❌ No folders found in plots directory.")
-                        else:
-                            latest_folder = max(experiment_folders, key=os.path.getmtime)
-                            folder_name = os.path.basename(latest_folder)
-                            st.info(f"🕵️ Using latest folder: `{folder_name}`")
+                        # Replace with your actual path
+                        # result = pyreadr.read_r(r"C:\Users\MM3815\Downloads\data_cleaning_app\robyn_output\all_models.rds")
 
-                            # Define paths to the required files
-                            model_info_path = os.path.join(latest_folder, "RobynModel-models.json")
-                            metrics_path = os.path.join(latest_folder, "model_metrics.json")
+                        # This returns a dictionary-like object
+                        # Usually, the key will be the name of the saved R object
+                        # ------------------------------------------------------------------
+                        # output_models = list(result.values())[0]
+                        # with open(r'C:\Users\MM3815\Downloads\data_cleaning_app\robyn_output\best_model_enhanced.pkl', 'wb') as f:
+                        #     pickle.dump(output_models, f)
+                        # Extract the data.frame or list
 
-                            if os.path.exists(model_info_path) and os.path.exists(metrics_path):
-                                with open(model_info_path, "r") as f:
-                                    full_model = json.load(f)
-
-                                with open(metrics_path, "r") as f:
-                                    metrics = json.load(f)
-
-                                input_collect = full_model.get("InputCollect", {})
-                                models_collect = full_model.get("ModelsCollect", {})
-
-                                enriched_models = []
-                                for model_id, metric in metrics.get("model_metrics", {}).items():
-                                    enriched_model_info = {
-                                        "Model_ID": model_id,
-                                        "NRMSE": metric.get("NRMSE"),
-                                        "Adjusted_R2": metric.get("Decomp.R.squared"),
-                                        "Dependent_Variable": input_collect.get("dep_var", [""])[0],
-                                        "Adstock_Type": input_collect.get("adstock", [""])[0],
-                                        "Paid_Media_Variables": input_collect.get("paid_media_vars", []),
-                                        "Control_Variables": input_collect.get("context_vars", []),
-                                        "Date_Variable": input_collect.get("date_var", [""])[0],
-                                        "Prophet_Variables": input_collect.get("prophet_vars", []),
-                                        "Country": input_collect.get("prophet_country", [""])[0],
-                                        "Iterations": models_collect.get("iterations", [None])[0],
-                                        "Trials": models_collect.get("trials", [None])[0],
-                                        "Total_Observations": input_collect.get("totalObservations", [None])[0],
-                                        "Train_Window_Start": input_collect.get("window_start", [""])[0],
-                                        "Train_Window_End": input_collect.get("window_end", [""])[0],
-                                        "Robyn_Version": input_collect.get("version", [""])[0],
-                                        "Training_Timestamp": models_collect.get("train_timestamp", [""])[0]
-                                    }
-                                    enriched_models.append(enriched_model_info)
-
-                                # Save to pickles folder
-                                pickle_path = os.path.join(pickle_dir, f"{folder_name}.pkl")
-                                with open(pickle_path, "wb") as f:
-                                    pickle.dump(enriched_models, f)
-
-                                st.success(f"✅ Saved enriched models to: `{pickle_path}`")
-                            else:
-                                st.error(f"❌ Required files not found in latest folder: `{folder_name}`")
                         # Locate latest updated folder in plot_path
                         # if os.path.exists(plot_path):
                         #     subdirs == [os.path.join(plot_path, d) for d in os.listdir(plot_path) if
@@ -695,6 +648,7 @@ elif st.session_state.current_step == 6:
         output_dir = "robyn_output"
         os.makedirs(output_dir, exist_ok=True)
         budget_opt_dir = os.path.join(output_dir, "budget_optimization")
+
         # 📌 Input box to capture the best model ID
         best_model_id = st.text_input(
             "Enter the Best Model ID to Save:",
@@ -702,19 +656,96 @@ elif st.session_state.current_step == 6:
             key="best_model_input"
         )
 
+        # Step 1: Budget Allocation Type
+        option = st.radio("Choose your budget type:", ["Open Allocation", "Fixed Budget"])
+        allocation_type = option
+        fixed_budget = None
+
+        if option == "Open Allocation":
+            st.success("Proceeding with Open Allocation...")
+
+        elif option == "Fixed Budget":
+            fixed_budget = st.number_input("Enter your fixed budget value:", min_value=0.0, step=100.0)
+            st.success(f"Fixed budget selected: {fixed_budget}")
+
+        # Step 2: Optional - Customized Constraints Budget
+        # constraints = None
+        # with st.expander("➕ Optional: Customized Constraints Budget"):
+        #     lower = st.number_input("Enter lower constraint:", min_value=0.0, step=0.5, key="lower")
+        #     upper = st.number_input("Enter upper constraint:", min_value=0.0, step=0.5, key="upper")
+        #     if lower > upper:
+        #         st.error("Lower constraint cannot be greater than upper constraint!")
+        #     else:
+        #         if lower > 0.0 or upper > 0.0:
+        #             constraints = {"lower": lower, "upper": upper}
+        #             st.info(f"Constraint Range: {lower} to {upper}")
+        #         else:
+        #             constraints = None  # Explicitly set to None if both are 0
+        constraints = {}
+        with st.expander("➕ Optional: Customized Constraints Budget"):
+            st.write("Set lower and upper constraints for each media variable:")
+
+            for var in media_vars:  # Assuming media_variables is your list of channel/variable names
+                col1, col2 = st.columns(2)
+                with col1:
+                    lower = st.number_input(
+                        f"Lower bound for {var}:", min_value=0.0, step=0.1, value=0.7, key=f"lower_{var}"
+                    )
+                with col2:
+                    upper = st.number_input(
+                        f"Upper bound for {var}:", min_value=0.0, step=0.1, value=1.5, key=f"upper_{var}"
+                    )
+
+                if lower > upper:
+                    st.error(f"❌ Lower bound cannot be greater than upper for {var}")
+                elif lower > 0.0 or upper > 0.0:
+                    constraints[var] = {"lower": lower, "upper": upper}
+                    st.success(f"✅ {var} → Constraint Range: {lower} to {upper}")
+
+        # If no constraints were added, set to None
+        if not constraints:
+            constraints = None
+
+        # Step 3: Optional - Time-based Budget
+        time_range_options = ["last_5", "last_10", "last_15", "last_20"]
+        selected_value = st.selectbox("Please select the range (optional)", ["None"] + time_range_options)
+
+        # Set time_range to None if "None" is selected
+        time_range = None if selected_value == "None" else selected_value
+
+        # Step 4: Save Model Info to JSON
         if best_model_id:
-            st.session_state.best_model_id = best_model_id  # ✅ Save input to session
+            st.session_state.best_model_id = best_model_id
             model_json_path = os.path.join(output_dir, "model.json")
-            model_data = {"model_id": best_model_id}
+
+            model_data = {
+                "model_id": best_model_id,
+                "allocation_type": allocation_type,
+                "fixed_budget": fixed_budget if allocation_type == "Fixed Budget" else None,
+                "constraints": constraints,
+                "time_range": time_range
+            }
+
+        # Step 4: Save Model Info to JSON
+        if best_model_id:
+            st.session_state.best_model_id = best_model_id
+            model_json_path = os.path.join(output_dir, "model.json")
+
+            model_data = {
+                "model_id": best_model_id,
+                "allocation_type": allocation_type,
+                "fixed_budget": fixed_budget if allocation_type == "Fixed Budget" else None,
+                "constraints": constraints,
+                "time_range": time_range
+            }
 
             try:
                 with open(model_json_path, "w") as f:
                     json.dump(model_data, f, indent=4)
-                st.success(f"✅ Saved selected model ID to {model_json_path}")
-                st.session_state.model_id_saved = True  # ✅ Trigger budget button display
-
+                st.success(f"✅ Saved selected model info to {model_json_path}")
+                st.session_state.model_id_saved = True
             except Exception as e:
-                st.error(f"❌ Failed to save model ID: {e}")
+                st.error(f"❌ Failed to save model info: {e}")
 
         # ✅ Show budget optimization button if model ID saved
     if st.session_state.get("model_id_saved"):

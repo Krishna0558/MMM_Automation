@@ -9,3 +9,5 @@ matplotlib~=3.10.1
 robynpy~=0.3.6
 seaborn~=0.13.2
 statsmodels~=0.14.4
+pyreadr~=0.5.3
+scikit-learn~=1.6.1
